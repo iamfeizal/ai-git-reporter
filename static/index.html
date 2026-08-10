@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Report Generator</title>
+    <style>
+      body {
+        font-family: -apple-system, system-ui, sans-serif;
+        background-color: #f4f6f8;
+        margin: 0;
+        padding: 40px;
+      }
+      .container {
+        max-width: 600px;
+        margin: 0 auto;
+        background: white;
+        padding: 30px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      h2 {
+        color: #333;
+        margin-top: 0;
+      }
+      .form-group {
+        margin-bottom: 20px;
+      }
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: bold;
+        color: #555;
+      }
+      input[type="date"] {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        box-sizing: border-box;
+      }
+      button {
+        background-color: #0052cc;
+        color: white;
+        border: none;
+        padding: 12px 20px;
+        width: 100%;
+        border-radius: 5px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: 0.3s;
+      }
+      button:hover {
+        background-color: #0043a6;
+      }
+      button:disabled {
+        background-color: #999;
+        cursor: not-allowed;
+      }
+      #status-box {
+        margin-top: 20px;
+        padding: 15px;
+        border-radius: 5px;
+        display: none;
+      }
+      .info {
+        background-color: #e3f2fd;
+        color: #0d47a1;
+        border: 1px solid #bbdefb;
+      }
+      .success {
+        background-color: #e8f5e9;
+        color: #1b5e20;
+        border: 1px solid #c8e6c9;
+      }
+      .error {
+        background-color: #ffebee;
+        color: #b71c1c;
+        border: 1px solid #ffcdd2;
+      }
+      .loader {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 3px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        border-top-color: #fff;
+        animation: spin 1s ease-in-out infinite;
+        margin-right: 8px;
+        vertical-align: middle;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>🤖 AI Report Generator</h2>
+      <p style="color: #666; margin-bottom: 25px">
+        Pilih rentang tanggal untuk mengambil data GitLab dan merangkumnya ke
+        Google Docs.
+      </p>
+
+      <div class="form-group">
+        <label>Tanggal Mulai</label>
+        <input type="date" id="startDate" required />
+      </div>
+
+      <div class="form-group">
+        <label>Tanggal Selesai</label>
+        <input type="date" id="endDate" required />
+      </div>
+
+      <button id="btnGenerate" onclick="generateReport()">
+        Mulai Generate Laporan
+      </button>
+
+      <div id="status-box"></div>
+    </div>
+
+    <script>
+      async function generateReport() {
+        const start = document.getElementById("startDate").value;
+        const end = document.getElementById("endDate").value;
+        const btn = document.getElementById("btnGenerate");
+        const statusBox = document.getElementById("status-box");
+
+        if (!start || !end) {
+          alert("Harap isi kedua tanggal!");
+          return;
+        }
+
+        // Set UI ke mode Loading
+        btn.disabled = true;
+        btn.innerHTML =
+          '<span class="loader"></span> AI sedang berpikir... (Bisa memakan waktu 30-60 detik)';
+        statusBox.className = "info";
+        statusBox.style.display = "block";
+        statusBox.innerHTML = "Menarik data commit dan memproses dengan LLM...";
+
+        try {
+          const response = await fetch(
+            `/api/generate-report/full-pipeline?start_date=${start}&end_date=${end}`,
+            {
+              method: "POST",
+            },
+          );
+          const result = await response.json();
+
+          if (response.ok) {
+            statusBox.className = "success";
+            statusBox.innerHTML = `<strong>✅ Sukses!</strong><br>${result.message}<br>Total Cluster: ${result.total_clusters}`;
+          } else {
+            statusBox.className = "error";
+            statusBox.innerHTML = `<strong>❌ Gagal:</strong> ${result.detail || "Terjadi kesalahan internal"}`;
+          }
+        } catch (error) {
+          statusBox.className = "error";
+          statusBox.innerHTML = `<strong>❌ Error Jaringan:</strong> ${error.message}`;
+        } finally {
+          // Kembalikan UI ke awal
+          btn.disabled = false;
+          btn.innerHTML = "Mulai Generate Laporan";
+        }
+      }
+    </script>
+  </body>
+</html>

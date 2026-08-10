@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  # 1. Service Database (pgvector)
+  vectordb:
+    image: ankane/pgvector:latest
+    container_name: report_vectordb
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: vectordb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # 2. Service Backend (FastAPI + LangGraph)
+  api:
+    build: .
+    container_name: report_api
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+      - vectordb
+    # Membaca variabel dari file .env di lokal Anda
+    env_file:
+      - .env
+    # Timpa DATABASE_URL dari .env lokal agar bisa konek ke container vectordb (bukan localhost)
+    environment:
+      - DATABASE_URL=postgresql://user:password@vectordb:5432/vectordb
+
+volumes:
+  pgdata:
