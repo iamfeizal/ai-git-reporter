@@ -71,16 +71,31 @@ DATABASE_URL=postgresql://user:password@vectordb:5432/vectordb
 4. Click **Share** and invite the Service Account Email (e.g., `service-name@project.iam.gserviceaccount.com`) as an **Editor**.
 5. Copy the Document ID from the URL and paste it into the `TARGET_DOC_ID` in your `.env` file.
 
-### 5. Run the Application (Docker)
+### 5. Run the Application
 
+#### Option A: Using Docker (Recommended)
 Build and spin up the containers using Docker Compose:
 
 ```bash
 docker compose up -d --build
-
 ```
-
 _Note: This will download the necessary PostgreSQL and Python images, install dependencies, and start the FastAPI server._
+
+#### Option B: Running Locally (Without Docker)
+You can run the application directly on your machine without Docker. If `DATABASE_URL` is omitted in `.env`, the system will automatically fall back to using an internal SQLite database (`local.db`).
+
+```bash
+# 1. Create a virtual environment
+python -m venv venv
+# Activate on Windows: venv\Scripts\activate
+# Activate on Mac/Linux: source venv/bin/activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Start the application
+uvicorn app.main:app --reload
+```
 
 ### 6. Usage
 

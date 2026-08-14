@@ -6,6 +6,8 @@ pydantic
 google-generativeai
 langgraph
 langchain-google-genai
+langchain-openai
+langchain-anthropic
 psycopg2-binary
 pgvector
 sqlalchemy

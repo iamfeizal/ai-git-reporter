@@ -1,7 +1,7 @@
 from langgraph.graph import StateGraph, START, END
 from langchain_core.prompts import ChatPromptTemplate
 from app.core.state import ReportState, L1ClassificationResult, ClusterResult
-from app.services.llm_service import llm
+from app.services.llm_service import get_llm
 
 # --- NODE 1: Klasifikasi Level 1 ---
 def classify_l1_node(state: ReportState):
@@ -18,6 +18,7 @@ def classify_l1_node(state: ReportState):
         ("user", "Data git commit (ID | Message):\n{commits_text}")
     ])
 
+    llm = get_llm()
     structured_llm = llm.with_structured_output(L1ClassificationResult)
     chain = prompt | structured_llm
     commits_text = "\n".join([f"[{c.id}] {c.message}" for c in commits])
@@ -54,6 +55,7 @@ def generate_narrative_node(state: ReportState):
     ])
 
     # Memaksa output LLM sesuai skema ClusterResult
+    llm = get_llm()
     structured_llm = llm.with_structured_output(ClusterResult)
     chain = prompt | structured_llm
     

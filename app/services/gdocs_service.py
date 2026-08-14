@@ -1,9 +1,5 @@
-import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from dotenv import load_dotenv
-
-load_dotenv()
 
 SCOPES = ['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive']
 SERVICE_ACCOUNT_FILE = 'credentials.json'
@@ -14,7 +10,6 @@ class GDocsService:
         self.creds = service_account.Credentials.from_service_account_file(
             SERVICE_ACCOUNT_FILE, scopes=SCOPES)
         self.docs_service = build('docs', 'v1', credentials=self.creds)
-        self.document_id = os.getenv("TARGET_DOC_ID")
 
     def insert_text_and_style(self, text: str, style: str = "NORMAL_TEXT"):
         """Fungsi pembantu untuk menyisipkan teks di bagian paling atas dokumen (index 1)"""
@@ -37,7 +32,7 @@ class GDocsService:
             })
         return requests
 
-    def write_report_to_docs(self, clusters: list):
+    def write_report_to_docs(self, clusters: list, target_doc_id: str):
         """Menerjemahkan Pydantic final_clusters menjadi perintah Batch Update Google Docs"""
         all_requests = []
         
@@ -77,6 +72,6 @@ class GDocsService:
         # Eksekusi semua perintah sekaligus ke Google Docs
         if all_requests:
             self.docs_service.documents().batchUpdate(
-                documentId=self.document_id, 
+                documentId=target_doc_id, 
                 body={'requests': all_requests}
             ).execute()

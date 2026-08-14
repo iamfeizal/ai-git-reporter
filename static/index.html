@@ -1,171 +1,644 @@
 <!doctype html>
 <html lang="id">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Report Generator</title>
-    <style>
-      body {
-        font-family: -apple-system, system-ui, sans-serif;
-        background-color: #f4f6f8;
-        margin: 0;
-        padding: 40px;
-      }
-      .container {
-        max-width: 600px;
-        margin: 0 auto;
-        background: white;
-        padding: 30px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-      }
-      h2 {
-        color: #333;
-        margin-top: 0;
-      }
-      .form-group {
-        margin-bottom: 20px;
-      }
-      label {
-        display: block;
-        margin-bottom: 8px;
-        font-weight: bold;
-        color: #555;
-      }
-      input[type="date"] {
-        width: 100%;
-        padding: 10px;
-        border: 1px solid #ccc;
-        border-radius: 5px;
-        box-sizing: border-box;
-      }
-      button {
-        background-color: #0052cc;
-        color: white;
-        border: none;
-        padding: 12px 20px;
-        width: 100%;
-        border-radius: 5px;
-        font-size: 16px;
-        cursor: pointer;
-        transition: 0.3s;
-      }
-      button:hover {
-        background-color: #0043a6;
-      }
-      button:disabled {
-        background-color: #999;
-        cursor: not-allowed;
-      }
-      #status-box {
-        margin-top: 20px;
-        padding: 15px;
-        border-radius: 5px;
-        display: none;
-      }
-      .info {
-        background-color: #e3f2fd;
-        color: #0d47a1;
-        border: 1px solid #bbdefb;
-      }
-      .success {
-        background-color: #e8f5e9;
-        color: #1b5e20;
-        border: 1px solid #c8e6c9;
-      }
-      .error {
-        background-color: #ffebee;
-        color: #b71c1c;
-        border: 1px solid #ffcdd2;
-      }
-      .loader {
-        display: inline-block;
-        width: 16px;
-        height: 16px;
-        border: 3px solid rgba(255, 255, 255, 0.3);
-        border-radius: 50%;
-        border-top-color: #fff;
-        animation: spin 1s ease-in-out infinite;
-        margin-right: 8px;
-        vertical-align: middle;
-      }
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <h2>🤖 AI Report Generator</h2>
-      <p style="color: #666; margin-bottom: 25px">
-        Pilih rentang tanggal untuk mengambil data GitLab dan merangkumnya ke
-        Google Docs.
-      </p>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>AI Report Generator Dashboard</title>
+        <script
+            defer
+            src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"
+        ></script>
+        <link
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+            rel="stylesheet"
+        />
+        <link rel="stylesheet" href="/static/style.css" />
+    </head>
+    <body x-data="app()">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">🤖 AI Git Reporter</div>
+            <div class="sidebar-nav">
+                <div
+                    class="nav-item"
+                    :class="currentTab === 'generator' ? 'active' : ''"
+                    @click="currentTab = 'generator'"
+                >
+                    📄 Report Generator
+                </div>
+                <div
+                    class="nav-item"
+                    :class="currentTab === 'llm' ? 'active' : ''"
+                    @click="currentTab = 'llm'"
+                >
+                    🧠 LLM Config
+                </div>
+                <div
+                    class="nav-item"
+                    :class="currentTab === 'gitlab' ? 'active' : ''"
+                    @click="currentTab = 'gitlab'"
+                >
+                    🦊 GitLab Instances
+                </div>
+            </div>
+        </div>
 
-      <div class="form-group">
-        <label>Tanggal Mulai</label>
-        <input type="date" id="startDate" required />
-      </div>
+        <!-- Main Content Area -->
+        <div class="main-wrapper">
+            <div class="header">
+                <span x-show="currentTab === 'generator'"
+                    >Report Generator</span
+                >
+                <span x-show="currentTab === 'llm'">LLM Configuration</span>
+                <span x-show="currentTab === 'gitlab'">GitLab Instances</span>
+            </div>
 
-      <div class="form-group">
-        <label>Tanggal Selesai</label>
-        <input type="date" id="endDate" required />
-      </div>
+            <div class="content">
+                <!-- Tab: GENERATOR -->
+                <div
+                    x-show="currentTab === 'generator'"
+                    style="display: none"
+                    x-transition
+                >
+                    <div class="card">
+                        <h2 class="card-header">Generate AI Report</h2>
+                        <p class="card-desc">
+                            Fetch commits from GitLab and generate a business
+                            narrative directly into Google Docs.
+                        </p>
 
-      <button id="btnGenerate" onclick="generateReport()">
-        Mulai Generate Laporan
-      </button>
+                        <!-- Stepper Progress Bar -->
+                        <div class="stepper-bar">
+                            <div
+                                class="step-item"
+                                :class="{ 'active': currentStep === 1, 'completed': currentStep > 1 }"
+                                @click="goToStep(1)"
+                                style="cursor: pointer"
+                            >
+                                <div class="step-indicator">
+                                    <span x-show="currentStep <= 1">1</span>
+                                    <span x-show="currentStep > 1">✓</span>
+                                </div>
+                                <div class="step-label">
+                                    <span class="step-title">Sumber Repo</span>
+                                    <span class="step-subtitle">Pilih Instance & Proyek</span>
+                                </div>
+                            </div>
+                            <div
+                                class="step-divider"
+                                :class="{ 'completed': currentStep > 1 }"
+                            ></div>
+                            <div
+                                class="step-item"
+                                :class="{ 'active': currentStep === 2, 'completed': currentStep > 2 }"
+                                @click="goToStep(2)"
+                                style="cursor: pointer"
+                            >
+                                <div class="step-indicator">
+                                    <span x-show="currentStep <= 2">2</span>
+                                    <span x-show="currentStep > 2">✓</span>
+                                </div>
+                                <div class="step-label">
+                                    <span class="step-title">Cek Commit</span>
+                                    <span class="step-subtitle">Filter Tanggal & Preview</span>
+                                </div>
+                            </div>
+                            <div
+                                class="step-divider"
+                                :class="{ 'completed': currentStep > 2 }"
+                            ></div>
+                            <div
+                                class="step-item"
+                                :class="{ 'active': currentStep === 3 }"
+                                @click="goToStep(3)"
+                                style="cursor: pointer"
+                            >
+                                <div class="step-indicator">
+                                    <span>3</span>
+                                </div>
+                                <div class="step-label">
+                                    <span class="step-title">Ekspor AI</span>
+                                    <span class="step-subtitle">Target Google Doc</span>
+                                </div>
+                            </div>
+                        </div>
 
-      <div id="status-box"></div>
-    </div>
+                        <!-- Step 1: Select GitLab Instance & Project -->
+                        <div x-show="currentStep === 1">
+                            <div class="form-group">
+                                <label>1. Select GitLab Instance</label>
+                                <select
+                                    x-model="report.instance_id"
+                                    @change="fetchProjects"
+                                    required
+                                >
+                                    <option value="">
+                                        -- Choose Instance --
+                                    </option>
+                                    <template
+                                        x-for="gl in gitlabs"
+                                        :key="gl.id"
+                                    >
+                                        <option
+                                            :value="gl.id"
+                                            x-text="gl.name"
+                                        ></option>
+                                    </template>
+                                </select>
+                            </div>
 
-    <script>
-      async function generateReport() {
-        const start = document.getElementById("startDate").value;
-        const end = document.getElementById("endDate").value;
-        const btn = document.getElementById("btnGenerate");
-        const statusBox = document.getElementById("status-box");
+                            <div class="form-group">
+                                <label>2. Select Project</label>
+                                <select
+                                    x-model="report.project_id"
+                                    @change="resetCommitCheck"
+                                    :disabled="!report.instance_id || projectsLoading"
+                                    required
+                                >
+                                    <option value="">
+                                        <span x-show="projectsLoading"
+                                            >Loading projects...</span
+                                        >
+                                        <span x-show="!projectsLoading"
+                                            >-- Choose Project --</span
+                                        >
+                                    </option>
+                                    <template x-for="p in projects" :key="p.id">
+                                        <option
+                                            :value="p.id"
+                                            x-text="p.name_with_namespace"
+                                        ></option>
+                                    </template>
+                                </select>
+                            </div>
 
-        if (!start || !end) {
-          alert("Harap isi kedua tanggal!");
-          return;
-        }
+                            <div class="step-actions justify-end">
+                                <button
+                                    type="button"
+                                    @click="nextStep"
+                                    :disabled="!report.instance_id || !report.project_id || projectsLoading"
+                                >
+                                    Lanjut ke Pilih Tanggal ➡️
+                                </button>
+                            </div>
+                        </div>
 
-        // Set UI ke mode Loading
-        btn.disabled = true;
-        btn.innerHTML =
-          '<span class="loader"></span> AI sedang berpikir... (Bisa memakan waktu 30-60 detik)';
-        statusBox.className = "info";
-        statusBox.style.display = "block";
-        statusBox.innerHTML = "Menarik data commit dan memproses dengan LLM...";
+                        <!-- Step 2: Date Pickers & Commit Discovery -->
+                        <div x-show="currentStep === 2" style="display: none">
+                            <div
+                                style="
+                                    display: grid;
+                                    grid-template-columns: 1fr 1fr;
+                                    gap: 16px;
+                                "
+                            >
+                                <div class="form-group">
+                                    <label>Start Date</label>
+                                    <input
+                                        type="date"
+                                        x-model="report.start_date"
+                                        @input="resetCommitCheck"
+                                        @change="resetCommitCheck"
+                                        required
+                                    />
+                                </div>
+                                <div class="form-group">
+                                    <label>End Date</label>
+                                    <input
+                                        type="date"
+                                        x-model="report.end_date"
+                                        @input="resetCommitCheck"
+                                        @change="resetCommitCheck"
+                                        required
+                                    />
+                                </div>
+                            </div>
 
-        try {
-          const response = await fetch(
-            `/api/generate-report/full-pipeline?start_date=${start}&end_date=${end}`,
-            {
-              method: "POST",
-            },
-          );
-          const result = await response.json();
+                            <div style="margin-top: 8px">
+                                <button
+                                    type="button"
+                                    class="btn-outline"
+                                    style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;"
+                                    @click="checkCommits"
+                                    :disabled="isCheckingCommits || !report.start_date || !report.end_date"
+                                >
+                                    <span x-show="!isCheckingCommits">🔍 Cek & Preview Commit</span>
+                                    <span x-show="isCheckingCommits">⏳ Mengecek commit di GitLab...</span>
+                                </button>
+                            </div>
 
-          if (response.ok) {
-            statusBox.className = "success";
-            statusBox.innerHTML = `<strong>✅ Sukses!</strong><br>${result.message}<br>Total Cluster: ${result.total_clusters}`;
-          } else {
-            statusBox.className = "error";
-            statusBox.innerHTML = `<strong>❌ Gagal:</strong> ${result.detail || "Terjadi kesalahan internal"}`;
-          }
-        } catch (error) {
-          statusBox.className = "error";
-          statusBox.innerHTML = `<strong>❌ Error Jaringan:</strong> ${error.message}`;
-        } finally {
-          // Kembalikan UI ke awal
-          btn.disabled = false;
-          btn.innerHTML = "Mulai Generate Laporan";
-        }
-      }
-    </script>
-  </body>
+                            <!-- Commit Check Status Box -->
+                            <div
+                                class="status-box"
+                                :class="commitCheckStatus.type"
+                                x-show="commitCheckStatus.message"
+                                x-text="commitCheckStatus.message"
+                            ></div>
+
+                            <!-- Commit Preview Container -->
+                            <div
+                                class="commit-preview-container"
+                                x-show="commitsChecked && totalCommitsFound > 0"
+                                style="display: none"
+                            >
+                                <div class="commit-preview-header">
+                                    <div class="commit-preview-title">
+                                        <span>📋 Sampel Commit Terbaru</span>
+                                    </div>
+                                    <div
+                                        class="commit-count-badge"
+                                        x-text="totalCommitsFound + ' Total Commit'"
+                                    ></div>
+                                </div>
+                                <div class="commit-list">
+                                    <template x-for="c in previewCommits" :key="c.short_id">
+                                        <div class="commit-item">
+                                            <div class="commit-item-header">
+                                                <span class="commit-hash" x-text="c.short_id"></span>
+                                                <span class="commit-title" x-text="c.title"></span>
+                                            </div>
+                                            <div class="commit-meta">
+                                                <span class="commit-author">
+                                                    👤 <span x-text="c.author_name"></span>
+                                                </span>
+                                                <span class="commit-date" x-show="c.committed_date">
+                                                    🕒 <span x-text="new Date(c.committed_date).toLocaleString('id-ID')"></span>
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <div class="step-actions">
+                                <button
+                                    type="button"
+                                    class="btn-outline"
+                                    @click="prevStep"
+                                >
+                                    ⬅️ Kembali
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="nextStep"
+                                    :disabled="!commitsChecked || totalCommitsFound <= 0"
+                                >
+                                    Lanjut ke Target Doc ➡️
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Step 3: Google Doc ID & Export -->
+                        <div x-show="currentStep === 3" style="display: none">
+                            <!-- Summary Box -->
+                            <div
+                                style="
+                                    background-color: #f8fafc;
+                                    border: 1px solid var(--border);
+                                    border-radius: var(--radius);
+                                    padding: 16px;
+                                    margin-bottom: 20px;
+                                    font-size: 13px;
+                                "
+                            >
+                                <h4 style="margin: 0 0 10px 0; font-size: 14px; font-weight: 600; color: var(--primary);">
+                                    📊 Ringkasan Data
+                                </h4>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; color: var(--text-light);">
+                                    <div>
+                                        <strong style="color: var(--text);">Proyek:</strong>
+                                        <span x-text="(projects.find(p => p.id == report.project_id) || {}).name_with_namespace || report.project_id"></span>
+                                    </div>
+                                    <div>
+                                        <strong style="color: var(--text);">Rentang Tanggal:</strong>
+                                        <span x-text="report.start_date + ' s/d ' + report.end_date"></span>
+                                    </div>
+                                    <div>
+                                        <strong style="color: var(--text);">Jumlah Commit:</strong>
+                                        <span style="color: #059669; font-weight: 600;" x-text="totalCommitsFound + ' commit terverifikasi'"></span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Target Google Doc ID</label>
+                                <input
+                                    type="text"
+                                    x-model="report.target_doc_id"
+                                    placeholder="e.g. 1ABCDEfg..."
+                                    required
+                                />
+                                <small
+                                    style="
+                                        color: var(--text-light);
+                                        font-size: 12px;
+                                        margin-top: 4px;
+                                        display: block;
+                                    "
+                                >
+                                    The document must be shared with the Service Account email as Editor.
+                                </small>
+                            </div>
+
+                            <div
+                                class="status-box"
+                                :class="status.type"
+                                x-show="status.message"
+                                x-html="status.message"
+                            ></div>
+
+                            <div class="step-actions">
+                                <button
+                                    type="button"
+                                    class="btn-outline"
+                                    @click="prevStep"
+                                    :disabled="isGenerating"
+                                >
+                                    ⬅️ Kembali
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="generateReport"
+                                    :disabled="isGenerating || !report.target_doc_id"
+                                >
+                                    <span x-show="!isGenerating">🚀 Generate Report</span>
+                                    <span x-show="isGenerating">⏳ AI is thinking and analyzing...</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab: LLM -->
+                <div
+                    x-show="currentTab === 'llm'"
+                    style="display: none"
+                    x-transition
+                >
+                    <div class="card">
+                        <h2 class="card-header">LLM Providers</h2>
+                        <p class="card-desc">
+                            Manage language model configurations for AI
+                            summarization.
+                        </p>
+
+                        <div style="margin-bottom: 24px">
+                            <template x-for="llm in llms" :key="llm.id">
+                                <div class="list-item">
+                                    <div>
+                                        <strong
+                                            x-text="llm.provider.toUpperCase()"
+                                        ></strong>
+                                        <span
+                                            class="badge"
+                                            x-show="llm.is_active"
+                                            >Active</span
+                                        ><br />
+                                        <small
+                                            x-text="llm.model_name"
+                                            style="color: var(--text-light)"
+                                        ></small>
+                                    </div>
+                                    <div>
+                                        <button
+                                            class="btn-outline btn-small"
+                                            x-show="!llm.is_active"
+                                            @click="activateLLM(llm.id)"
+                                        >
+                                            Set Active
+                                        </button>
+                                        <button
+                                            class="btn-outline btn-small"
+                                            @click="testExistingLLM(llm)"
+                                        >
+                                            Test Connection
+                                        </button>
+                                        <button
+                                            class="btn-outline btn-small"
+                                            @click="editLLM(llm)"
+                                        >
+                                            Edit
+                                        </button>
+                                        <button
+                                            class="btn-outline btn-small"
+                                            style="
+                                                color: #ef4444;
+                                                border-color: #fca5a5;
+                                            "
+                                            @click="deleteLLM(llm.id)"
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                            <div
+                                x-show="llms.length === 0"
+                                style="
+                                    font-size: 14px;
+                                    color: var(--text-light);
+                                    text-align: center;
+                                    padding: 20px;
+                                    border: 1px dashed var(--border);
+                                    border-radius: 6px;
+                                "
+                            >
+                                No configurations found. Add one below.
+                            </div>
+                        </div>
+
+                        <h3
+                            style="
+                                font-size: 16px;
+                                margin-bottom: 16px;
+                                border-top: 1px solid var(--border);
+                                padding-top: 24px;
+                            "
+                            x-text="editingLLMId ? 'Edit Provider' : 'Add New Provider'"
+                        ></h3>
+                        <form @submit.prevent="addLLM">
+                            <div class="form-group">
+                                <label>Provider</label>
+                                <select x-model="newLLM.provider" required>
+                                    <option value="gemini">Gemini</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="anthropic">Anthropic</option>
+                                    <option value="custom">
+                                        Custom (Ollama / Local)
+                                    </option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Model Name</label>
+                                <input
+                                    type="text"
+                                    x-model="newLLM.model_name"
+                                    placeholder="e.g. gpt-4o, gemini-1.5-flash"
+                                    required
+                                />
+                            </div>
+                            <div class="form-group">
+                                <label>API Key</label>
+                                <input
+                                    type="password"
+                                    x-model="newLLM.api_key"
+                                    placeholder="Enter API Key"
+                                />
+                            </div>
+                            <div
+                                class="form-group"
+                                x-show="newLLM.provider === 'custom'"
+                            >
+                                <label>Base URL</label>
+                                <input
+                                    type="text"
+                                    x-model="newLLM.base_url"
+                                    placeholder="http://localhost:11434/v1"
+                                />
+                            </div>
+                            <div style="display: flex; gap: 8px">
+                                <button
+                                    type="button"
+                                    class="btn-outline"
+                                    style="flex: 1"
+                                    @click="testLLM"
+                                    :disabled="isTestingLLM"
+                                >
+                                    <span x-show="!isTestingLLM"
+                                        >Test Connection</span
+                                    >
+                                    <span x-show="isTestingLLM"
+                                        >Testing...</span
+                                    >
+                                </button>
+                                <button
+                                    type="submit"
+                                    class="btn-outline"
+                                    style="flex: 1"
+                                    x-text="editingLLMId ? 'Update LLM Configuration' : 'Add LLM Configuration'"
+                                ></button>
+                                <button
+                                    type="button"
+                                    class="btn-outline"
+                                    style="flex: 1; color: var(--text-light)"
+                                    x-show="editingLLMId"
+                                    @click="cancelEditLLM"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                            <div
+                                class="status-box"
+                                :class="llmTestStatus.type"
+                                x-show="llmTestStatus.message"
+                                x-html="llmTestStatus.message"
+                                style="margin-top: 16px"
+                            ></div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Tab: GITLAB -->
+                <div
+                    x-show="currentTab === 'gitlab'"
+                    style="display: none"
+                    x-transition
+                >
+                    <div class="card">
+                        <h2 class="card-header">GitLab Instances</h2>
+                        <p class="card-desc">
+                            Configure the source GitLab servers to fetch commit
+                            data from.
+                        </p>
+
+                        <div style="margin-bottom: 24px">
+                            <template x-for="gl in gitlabs" :key="gl.id">
+                                <div class="list-item">
+                                    <div>
+                                        <strong x-text="gl.name"></strong><br />
+                                        <small
+                                            x-text="gl.gitlab_url"
+                                            style="color: var(--text-light)"
+                                        ></small>
+                                    </div>
+                                    <button
+                                        class="btn-outline btn-small"
+                                        style="
+                                            color: #ef4444;
+                                            border-color: #fca5a5;
+                                        "
+                                        @click="deleteGitLab(gl.id)"
+                                    >
+                                        Delete
+                                    </button>
+                                </div>
+                            </template>
+                            <div
+                                x-show="gitlabs.length === 0"
+                                style="
+                                    font-size: 14px;
+                                    color: var(--text-light);
+                                    text-align: center;
+                                    padding: 20px;
+                                    border: 1px dashed var(--border);
+                                    border-radius: 6px;
+                                "
+                            >
+                                No GitLab instances found. Add one below.
+                            </div>
+                        </div>
+
+                        <h3
+                            style="
+                                font-size: 16px;
+                                margin-bottom: 16px;
+                                border-top: 1px solid var(--border);
+                                padding-top: 24px;
+                            "
+                        >
+                            Add New Instance
+                        </h3>
+                        <form @submit.prevent="addGitLab">
+                            <div class="form-group">
+                                <label>Alias Name</label>
+                                <input
+                                    type="text"
+                                    x-model="newGitLab.name"
+                                    placeholder="e.g. Main GitLab"
+                                    required
+                                />
+                            </div>
+                            <div class="form-group">
+                                <label>GitLab URL</label>
+                                <input
+                                    type="text"
+                                    x-model="newGitLab.gitlab_url"
+                                    placeholder="https://gitlab.com"
+                                    required
+                                />
+                            </div>
+                            <div class="form-group">
+                                <label>Personal Access Token (PAT)</label>
+                                <input
+                                    type="password"
+                                    x-model="newGitLab.token"
+                                    placeholder="glpat-..."
+                                    required
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                class="btn-outline"
+                                style="width: 100%"
+                            >
+                                Add GitLab Instance
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script src="/static/app.js"></script>
+    </body>
 </html>
