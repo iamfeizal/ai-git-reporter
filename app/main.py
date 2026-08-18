@@ -1,15 +1,16 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.gitlab_service import GitLabService
 from app.core.database import engine, get_db, Base
 from app.core.workflow import app_workflow
-from app.core.state import CommitData
+from app.core.state import NormalizedCommit
 from app.services.gdocs_service import GDocsService
-from app.routers import config_router
+from app.routers import config_router, workflow_router
 from app.models.config_models import GitLabInstance
 from app.schemas.config_schemas import GenerateReportRequest
 
@@ -20,7 +21,20 @@ app = FastAPI(title="AI Report System API")
 gitlab_service = GitLabService()
 gdocs_service = GDocsService()
 
+# CORS middleware (needed for Vite dev server on different port)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
 app.include_router(config_router.router)
+app.include_router(workflow_router.router)
+
+# Serve static files (legacy Alpine.js frontend)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
@@ -77,22 +91,28 @@ def test_db():
 
 @app.post("/api/generate-report/full-pipeline")
 def generate_report_full(req: GenerateReportRequest, db: Session = Depends(get_db)):
+    """
+    Legacy endpoint: runs the full pipeline without HITL pauses.
+    Uses the simple compiled workflow (no checkpointer).
+    
+    For the HITL workflow, use POST /api/workflow/start instead.
+    """
     try:
         instance = db.query(GitLabInstance).filter(GitLabInstance.id == req.instance_id).first()
         if not instance:
             raise HTTPException(status_code=404, detail="GitLab instance not found")
-            
-        raw_gitlab_data = gitlab_service.get_commits(instance.gitlab_url, instance.token, req.project_id, req.start_date, req.end_date)
         
-        commits_for_ai = [
-            CommitData(
-                id=c["short_id"], 
-                message=f"{c['title']} - {c.get('message', '')}"
-            ) 
-            for c in raw_gitlab_data
-        ]
+        # Use new normalized commit pipeline
+        normalized_commits = gitlab_service.get_normalized_commits(
+            url=instance.gitlab_url,
+            token=instance.token,
+            project_id=req.project_id,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            filter_noise=True,
+        )
         
-        if not commits_for_ai:
+        if not normalized_commits:
             return {
                 "status": "warning",
                 "message": "Tidak ada commit ditemukan pada rentang tanggal tersebut.",
@@ -100,12 +120,19 @@ def generate_report_full(req: GenerateReportRequest, db: Session = Depends(get_d
             }
         
         initial_state = {
-            "raw_commits": commits_for_ai,
+            "month_year": "",
+            "raw_commits": normalized_commits,
             "classified_commits": [],
-            "final_clusters": []
+            "hitl_1_approved": False,
+            "l2_classified": [],
+            "clusters": [],
+            "hitl_2_approved": False,
+            "executive_summary": "",
+            "final_clusters": [],
+            "document_url": "",
         }
         
-        print(f"Menjalankan Pipeline untuk {len(commits_for_ai)} commit...")
+        print(f"Menjalankan Pipeline untuk {len(normalized_commits)} commit...")
         # invoke() akan menjalankan graph dari START sampai END
         result_state = app_workflow.invoke(initial_state)
         

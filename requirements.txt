@@ -1,13 +1,26 @@
+# --- Core Framework ---
 fastapi
 uvicorn[standard]
 requests
 python-dotenv
 pydantic
+
+# --- LLM & LangChain ---
 google-generativeai
 langgraph
 langchain-google-genai
 langchain-openai
 langchain-anthropic
+
+# --- LangGraph Checkpointer (PostgreSQL) ---
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
+
+# --- Database ---
 psycopg2-binary
 pgvector
 sqlalchemy
+
+# --- Embeddings (Semantic Clustering) ---
+numpy
+scikit-learn
