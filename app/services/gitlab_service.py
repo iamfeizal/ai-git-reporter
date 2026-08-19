@@ -15,13 +15,16 @@ from app.services.commit_parser import (
     filter_noise_commits,
     parse_conventional_commit,
 )
+from tenacity import retry, stop_after_attempt, wait_exponential
+from app.core.logger import logger
 
 
 class GitLabService:
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def get_commits_raw(self, url: str, token: str, project_id: str, start_date: str, end_date: str) -> List[dict]:
         """
-        Fetch ALL commits from GitLab with full pagination.
+        Fetch ALL commits from GitLab with full pagination and retry logic.
         Returns raw dicts from the API.
         """
         api_url = f"{url}/api/v4/projects/{project_id}/repository/commits"

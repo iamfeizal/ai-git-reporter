@@ -24,3 +24,12 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def init_db():
+    """Inisialisasi database dan extension."""
+    if not DATABASE_URL.startswith("sqlite"):
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            
+    Base.metadata.create_all(bind=engine)

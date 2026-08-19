@@ -24,3 +24,6 @@ sqlalchemy
 # --- Embeddings (Semantic Clustering) ---
 numpy
 scikit-learn
+
+# --- Utilities ---
+tenacity

@@ -4,18 +4,20 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from contextlib import asynccontextmanager
 
 from app.services.gitlab_service import GitLabService
-from app.core.database import engine, get_db, Base
+from app.core.database import engine, get_db, Base, init_db
 from app.core.workflow import app_workflow
 from app.core.state import NormalizedCommit
-from app.services.gdocs_service import GDocsService
+from app.models.config_models import Base, LLMConfig, GitLabInstance
+from app.models.embedding_models import CommitEmbedding
 from app.routers import config_router, workflow_router
-from app.models.config_models import GitLabInstance
+from app.core.logger import logger
 from app.schemas.config_schemas import GenerateReportRequest
 
-# Create DB Tables
-Base.metadata.create_all(bind=engine)
+# Pastikan tabel terbuat (Note: Sebaiknya gunakan Alembic untuk production migration)
+init_db()
 
 app = FastAPI(title="AI Report System API")
 gitlab_service = GitLabService()
@@ -132,11 +134,11 @@ def generate_report_full(req: GenerateReportRequest, db: Session = Depends(get_d
             "document_url": "",
         }
         
-        print(f"Menjalankan Pipeline untuk {len(normalized_commits)} commit...")
+        logger.info(f"Menjalankan Pipeline untuk {len(normalized_commits)} commit...")
         # invoke() akan menjalankan graph dari START sampai END
         result_state = app_workflow.invoke(initial_state)
         
-        print("Mengekspor laporan ke Google Docs...")
+        logger.info("Mengekspor laporan ke Google Docs...")
         final_clusters = result_state["final_clusters"]
         if final_clusters:
             gdocs_service.write_report_to_docs(final_clusters, req.target_doc_id)

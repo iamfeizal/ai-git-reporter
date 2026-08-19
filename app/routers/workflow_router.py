@@ -270,12 +270,14 @@ def resume_workflow(thread_id: str, req: ResumeWorkflowRequest):
         if is_completed and state.values:
             final_clusters = state.values.get("final_clusters", [])
             executive_summary = state.values.get("executive_summary", "")
+            document_url = state.values.get("document_url", "")
             return {
                 "status": "completed",
                 "thread_id": thread_id,
                 "message": "Pipeline selesai!",
                 "total_clusters": len(final_clusters) if isinstance(final_clusters, list) else 0,
                 "executive_summary": executive_summary,
+                "document_url": document_url,
             }
         
         # Check for new interrupt

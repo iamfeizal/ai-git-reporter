@@ -21,7 +21,8 @@ def get_llm():
             return ChatGoogleGenerativeAI(
                 model=config.model_name, 
                 api_key=config.api_key,
-                temperature=0
+                temperature=0,
+                max_retries=3
             )
         elif config.provider == "openai" or config.provider == "custom":
             # ChatOpenAI can be used for OpenAI or any OpenAI-compatible API (like Ollama, vLLM, LMStudio)
@@ -29,13 +30,15 @@ def get_llm():
                 model=config.model_name,
                 api_key=config.api_key or "empty",
                 base_url=config.base_url,
-                temperature=0
+                temperature=0,
+                max_retries=3
             )
         elif config.provider == "anthropic":
             return ChatAnthropic(
                 model_name=config.model_name,
                 api_key=config.api_key,
-                temperature=0
+                temperature=0,
+                max_retries=3
             )
         else:
             raise Exception(f"Provider LLM tidak didukung: {config.provider}")

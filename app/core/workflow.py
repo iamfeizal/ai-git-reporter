@@ -28,6 +28,7 @@ from app.core.state import (
 )
 from app.services.llm_service import get_llm
 from app.services.embedding_service import cluster_commits_by_similarity
+from app.core.logger import logger
 
 
 # =====================================================================
@@ -57,7 +58,7 @@ Klasifikasikan SETIAP commit. Berikan alasan singkat (1 kalimat) kenapa commit t
         for c in commits
     ])
 
-    print(f"[Node: classify_l1] Mengklasifikasikan {len(commits)} commit...")
+    logger.info(f"[Node: classify_l1] Mengklasifikasikan {len(commits)} commit...")
     response = chain.invoke({"commits_text": commits_text})
     return {"classified_commits": response.results}
 
@@ -136,7 +137,7 @@ Klasifikasikan setiap commit berdasarkan ID-nya. Pertahankan kategori L1 (SYSTEM
     structured_llm = llm.with_structured_output(L2ClassificationResult)
     chain = prompt | structured_llm
 
-    print(f"[Node: classify_l2] Mengklasifikasikan {len(classified)} commit ke Level 2...")
+    logger.info(f"[Node: classify_l2] Mengklasifikasikan {len(classified)} commit ke Level 2...")
     l2_response = chain.invoke({"combined_text": combined_text})
     l2_classified = l2_response.results
 
@@ -158,7 +159,7 @@ Klasifikasikan setiap commit berdasarkan ID-nya. Pertahankan kategori L1 (SYSTEM
             # Attempt semantic clustering
             semantic_groups = cluster_commits_by_similarity(group_commits)
         except Exception as e:
-            print(f"[Warning] Embedding clustering failed for {l1_cat}/{l2_cat}: {e}. Falling back to single cluster.")
+            logger.warning(f"Embedding clustering failed for {l1_cat}/{l2_cat}: {e}. Falling back to single cluster.")
             semantic_groups = [group_commits]
 
         for cluster_group in semantic_groups:
@@ -175,7 +176,7 @@ Klasifikasikan setiap commit berdasarkan ID-nya. Pertahankan kategori L1 (SYSTEM
                 category_level_2=l2_cat,
             ))
 
-    print(f"[Node: classify_l2] Dihasilkan {len(all_clusters)} cluster dari {len(l2_classified)} commit.")
+    logger.info(f"[Node: classify_l2] Dihasilkan {len(all_clusters)} cluster dari {len(l2_classified)} commit.")
     return {"l2_classified": l2_classified, "clusters": all_clusters}
 
 
@@ -228,16 +229,23 @@ def generate_summary_node(state: ReportState) -> dict:
     feature_count = sum(1 for c in clusters if c.category_level_2 == "FEATURE_UI")
     bugfix_count = sum(1 for c in clusters if c.category_level_2 == "BUG_FIX")
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """Anda adalah Technical Writer Senior. Tugas Anda menulis Executive Summary (ringkasan eksekutif) 
-untuk laporan progres pengembangan bulanan IT.
+    from app.data.style_guide import get_few_shot_prompt
+    few_shot_examples = get_few_shot_prompt()
 
-ATURAN:
-1. Tulis dalam Bahasa Indonesia formal dan profesional.
-2. Tulis dalam 2-3 paragraf naratif (BUKAN bullet points).
-3. Jelaskan gambaran besar aktivitas bulan ini: berapa fitur baru, berapa bug fix, area utama pengembangan.
-4. JANGAN menyebut nama file, fungsi, atau jargon teknis mentah.
-5. Fokus pada dampak bisnis dan nilai yang dihasilkan."""),
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", f"""Anda adalah Senior Technical Writer dan Product Manager.
+Tugas Anda adalah mengubah daftar commit teknis menjadi paragraf narasi bisnis (Executive Summary style) dalam Bahasa Indonesia yang formal, elegan, dan mudah dipahami oleh manajemen non-teknis.
+
+ATURAN PENULISAN (SANGAT PENTING):
+1. Mulai langsung ke inti. JANGAN gunakan pengantar seperti "Berikut adalah narasi...", "Pada cluster ini...", atau "Pembaruan ini mencakup...".
+2. Ubah istilah teknis menjadi nilai bisnis. (contoh: "Fix NullPointerException" -> "Perbaikan stabilitas sistem untuk mencegah aplikasi tertutup tiba-tiba").
+3. Format paragraf yang utuh, BUKAN bullet points.
+4. Gunakan kalimat pasif formal yang mengalir dengan baik (contoh: "Dilakukan penambahan fitur...", "Telah diperbaiki masalah pada...").
+5. Hindari kata-kata hiperbolis atau marketing (seperti "luar biasa", "revolusioner").
+6. Jika pembaruan tersebut bersifat visual/UI atau membutuhkan bukti visual, TULISKAN placeholder tepat di akhir narasi dengan format: [TAMBAHKAN GAMBAR/CODE: Penjelasan visual yang dibutuhkan].
+
+{few_shot_examples}
+"""),
         ("user", """Bulan: {month_year}
 Statistik: {system_count} cluster Sistem Aplikasi, {service_count} cluster Layanan/Infrastruktur, {feature_count} fitur baru, {bugfix_count} perbaikan bug.
 
@@ -250,7 +258,7 @@ Tuliskan Executive Summary:""")
     llm = get_llm()
     chain = prompt | llm
 
-    print("[Node: generate_summary] Menyusun Executive Summary...")
+    logger.info("[Node: generate_summary] Menyusun Executive Summary...")
     response = chain.invoke({
         "month_year": month_year,
         "system_count": system_count,
@@ -280,8 +288,11 @@ def generate_narratives_node(state: ReportState) -> dict:
 
     commit_dict = {c.short_id: c for c in raw_commits}
 
+    from app.data.style_guide import get_few_shot_prompt
+    few_shot_examples = get_few_shot_prompt()
+
     # System prompt matching GUIDELINES §4
-    system_prompt = """Anda adalah Technical Writer & Business Analyst Senior di perusahaan enterprise.
+    system_prompt = f"""Anda adalah Technical Writer & Business Analyst Senior di perusahaan enterprise.
 Tugas Anda adalah menerjemahkan kelompok pesan git commit (Conventional Commits) 
 menjadi laporan progres teknis yang mudah dipahami oleh manajemen eksekutif non-teknis.
 
@@ -297,7 +308,9 @@ ATURAN PENULISAN:
 4. VISUAL PLACEHOLDER:
    Jika perubahan melibatkan antarmuka pengguna (UI), alur transaksi baru, atau perubahan arsitektur kompleks,
    set variabel requires_visual = true dan berikan panduan screenshot yang tepat pada 'visual_placeholder_note'.
-5. MINIMAL 3 kalimat per narasi. Narasi harus menjelaskan APA yang diubah, MENGAPA diubah, dan APA dampaknya."""
+5. MINIMAL 3 kalimat per narasi. Narasi harus menjelaskan APA yang diubah, MENGAPA diubah, dan APA dampaknya.
+
+{few_shot_examples}"""
 
     llm = get_llm()
     structured_llm = llm.with_structured_output(ClusterResult)
@@ -338,12 +351,41 @@ Tuliskan business_narrative yang mendalam dan profesional.
 
         batch_num = (i // batch_size) + 1
         total_batches = (len(clusters) + batch_size - 1) // batch_size
-        print(f"[Node: generate_narratives] Batch {batch_num}/{total_batches} ({len(batch)} cluster)...")
+        logger.info(f"[Node: generate_narratives] Batch {batch_num}/{total_batches} ({len(batch)} cluster)...")
 
         response = chain.invoke({"combined_text": combined_text})
         final_clusters.extend(response.clusters)
 
     return {"final_clusters": final_clusters}
+
+
+# =====================================================================
+# NODE 7: Document Generation (Google Docs)
+# =====================================================================
+from app.services.gdocs_service import GDocsService
+
+def generate_document_node(state: ReportState) -> dict:
+    """Generate the Google Doc report."""
+    logger.info("[Node: generate_document] Membuat dokumen Google Docs...")
+    
+    try:
+        gdocs_service = GDocsService()
+        if not gdocs_service.docs_service:
+            logger.warning("GDocsService tidak dikonfigurasi, skip document generation.")
+            return {"document_url": ""}
+            
+        # Try to get template ID from env, or create a new template on the fly
+        template_id = os.getenv("GDOCS_TEMPLATE_ID")
+        if not template_id:
+            logger.info("[Node: generate_document] Tidak ada template_id, membuat template baru...")
+            template_id = gdocs_service.create_template_document()
+            
+        url = gdocs_service.generate_report_from_template(template_id, state)
+        logger.info(f"[Node: generate_document] Dokumen berhasil dibuat: {url}")
+        return {"document_url": url}
+    except Exception as e:
+        logger.error(f"Gagal membuat dokumen: {e}")
+        return {"document_url": ""}
 
 
 # =====================================================================
@@ -360,6 +402,7 @@ def build_workflow() -> StateGraph:
     workflow.add_node("hitl_checkpoint_2", hitl_checkpoint_2_node)
     workflow.add_node("generate_summary", generate_summary_node)
     workflow.add_node("generate_narratives", generate_narratives_node)
+    workflow.add_node("generate_document", generate_document_node)
 
     # Define edges
     workflow.add_edge(START, "classify_l1")
@@ -368,7 +411,8 @@ def build_workflow() -> StateGraph:
     workflow.add_edge("classify_l2_and_cluster", "hitl_checkpoint_2")
     workflow.add_edge("hitl_checkpoint_2", "generate_summary")
     workflow.add_edge("generate_summary", "generate_narratives")
-    workflow.add_edge("generate_narratives", END)
+    workflow.add_edge("generate_narratives", "generate_document")
+    workflow.add_edge("generate_document", END)
 
     return workflow
 

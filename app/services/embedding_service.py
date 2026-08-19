@@ -14,6 +14,7 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 
 from app.core.state import NormalizedCommit
+from app.core.logger import logger
 
 load_dotenv()
 
@@ -23,16 +24,12 @@ EMBEDDING_MODEL = "models/text-embedding-004"
 DEFAULT_SIMILARITY_THRESHOLD = 0.55
 
 
+from sqlalchemy.orm import Session
+from app.models.embedding_models import CommitEmbedding
+
 def get_embeddings(texts: List[str], api_key: str = None) -> List[List[float]]:
     """
     Generate embeddings for a list of texts using Gemini text-embedding-004.
-    
-    Args:
-        texts: List of strings to embed
-        api_key: Optional API key (falls back to GEMINI_API_KEY env var)
-    
-    Returns:
-        List of embedding vectors (list of floats)
     """
     key = api_key or os.getenv("GEMINI_API_KEY")
     if not key:
@@ -50,27 +47,37 @@ def get_embeddings(texts: List[str], api_key: str = None) -> List[List[float]]:
     return result["embedding"]
 
 
+def save_embeddings_to_db(commits: List[NormalizedCommit], embeddings: List[List[float]], db: Session):
+    """Saves generated embeddings to pgvector database."""
+    if not db:
+        return
+        
+    try:
+        # Note: in a real app, we should check if they already exist, but for now we just insert
+        objects = []
+        for c, emb in zip(commits, embeddings):
+            objects.append(CommitEmbedding(
+                commit_short_id=c.short_id,
+                project_id=c.project_id if hasattr(c, 'project_id') else "unknown",
+                title=c.title,
+                message=c.message,
+                embedding=emb
+            ))
+        db.bulk_save_objects(objects)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Failed to save embeddings to db: {e}")
+
+
 def cluster_commits_by_similarity(
     commits: List[NormalizedCommit],
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     api_key: str = None,
+    db: Session = None,
 ) -> List[List[NormalizedCommit]]:
     """
     Cluster commits by semantic similarity using embeddings + agglomerative clustering.
-    
-    Process:
-    1. Generate embedding for each commit's title + message
-    2. Compute pairwise cosine similarity matrix
-    3. Apply agglomerative clustering with distance threshold
-    4. Return groups of related commits
-    
-    Args:
-        commits: List of NormalizedCommit objects to cluster
-        similarity_threshold: Minimum cosine similarity to consider commits related (0.0-1.0)
-        api_key: Optional Gemini API key
-    
-    Returns:
-        List of commit groups (each group is a list of NormalizedCommit)
     """
     if len(commits) <= 1:
         return [commits] if commits else []
@@ -78,17 +85,20 @@ def cluster_commits_by_similarity(
     # Build text representations for embedding
     texts = []
     for c in commits:
-        # Combine title and message body for richer semantic signal
         text = c.title
         if c.message and c.message != c.title:
-            # Avoid duplicating title in the text
             body = c.message.replace(c.title, "").strip()
             if body:
-                text = f"{text} — {body[:200]}"  # Limit body length
+                text = f"{text} — {body[:200]}"
         texts.append(text)
     
     # Generate embeddings
     embeddings = get_embeddings(texts, api_key=api_key)
+    
+    # Optionally save to pgvector database
+    if db:
+        save_embeddings_to_db(commits, embeddings, db)
+        
     embedding_matrix = np.array(embeddings)
     
     # Compute cosine similarity → convert to distance
