@@ -103,6 +103,8 @@ class MonthlyReportSchema(BaseModel):
 class ReportState(TypedDict):
     # Input
     month_year: str
+    gdocs_mode: str
+    gdocs_document_id: str
     raw_commits: List[NormalizedCommit]
     
     # Tahap 2: L1 Classification

@@ -65,20 +65,22 @@ class GDocsService:
         copied_file = self.drive_service.files().copy(fileId=template_id, body=body).execute()
         return copied_file.get('id')
 
-    def generate_report_from_template(self, template_id: str, report_data: ReportState) -> str:
+    def generate_report_from_template(self, template_id: str, report_data: ReportState, mode: str = "direct") -> str:
         """
-        Main pipeline to generate a final report from a template.
-        1. Copy template
-        2. Replace static placeholders (MONTH_YEAR, EXEC_SUMMARY)
-        3. Insert clusters at {{CONTENT_START}} using index-tracked insertion
-        4. Highlight visual placeholders
+        Main pipeline to generate a final report.
+        If mode == "copy": copies template and writes to it.
+        If mode == "direct": writes directly to template_id.
+        1. Replace static placeholders (MONTH_YEAR, EXEC_SUMMARY) if they exist.
+        2. Insert clusters at {{CONTENT_START}} or at the end of the document.
         Returns the Document URL.
         """
         month_year = report_data.get("month_year", "Unknown Month")
         doc_title = f"Laporan Bulanan IT - {month_year}"
         
-        # 1. Copy Template
-        new_doc_id = self.copy_template(template_id, doc_title)
+        if mode == "copy":
+            new_doc_id = self.copy_template(template_id, doc_title)
+        else:
+            new_doc_id = template_id
         
         # 2. Prepare Requests for Placeholder Replacement
         requests = []
@@ -91,6 +93,11 @@ class GDocsService:
         })
         
         exec_summary = report_data.get("executive_summary", "")
+        if isinstance(exec_summary, list):
+            exec_summary = "".join([str(p) for p in exec_summary])
+        else:
+            exec_summary = str(exec_summary)
+
         requests.append({
             "replaceAllText": {
                 "containsText": {"text": "{{EXEC_SUMMARY}}", "matchCase": True},
@@ -107,6 +114,7 @@ class GDocsService:
         
         # Find {{CONTENT_START}}
         content_start_index = -1
+        found_placeholder = False
         for element in doc.get('body').get('content'):
             if 'paragraph' in element:
                 for pe in element.get('paragraph').get('elements'):
@@ -114,24 +122,25 @@ class GDocsService:
                         content = pe.get('textRun').get('content')
                         if '{{CONTENT_START}}' in content:
                             content_start_index = pe.get('startIndex')
+                            found_placeholder = True
                             break
-                if content_start_index != -1:
+                if found_placeholder:
                     break
         
-        if content_start_index == -1:
+        if not found_placeholder:
             # Fallback to appending at the end if placeholder is missing
             content_start_index = doc.get('body').get('content')[-1].get('endIndex') - 1
             
         requests = []
         current_index = content_start_index
         
-        # Remove the placeholder text
-        if content_start_index != -1:
+        # Remove the placeholder text ONLY if we actually found it
+        if found_placeholder:
             requests.append({
                 "deleteContentRange": {
                     "range": {
                         "startIndex": current_index,
-                        "endIndex": current_index + len("{{CONTENT_START}}\n")
+                        "endIndex": current_index + len("{{CONTENT_START}}")
                     }
                 }
             })
@@ -233,14 +242,15 @@ class GDocsService:
             self.docs_service.documents().batchUpdate(
                 documentId=new_doc_id, body={'requests': requests}).execute()
             
-        # Give anyone with the link view access (optional, but good for returning the URL)
-        try:
-            self.drive_service.permissions().create(
-                fileId=new_doc_id,
-                body={'type': 'anyone', 'role': 'writer'},
-                fields='id'
-            ).execute()
-        except Exception as e:
-            logger.warning(f"Failed to set document permissions: {e}")
+        if mode == "copy":
+            # Give anyone with the link view access (optional, but good for returning the URL)
+            try:
+                self.drive_service.permissions().create(
+                    fileId=new_doc_id,
+                    body={'type': 'anyone', 'role': 'writer'},
+                    fields='id'
+                ).execute()
+            except Exception as e:
+                logger.warning(f"Failed to set document permissions: {e}")
 
         return f"https://docs.google.com/document/d/{new_doc_id}/edit"

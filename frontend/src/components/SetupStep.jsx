@@ -5,10 +5,11 @@ export default function SetupStep({ config, setConfig, onNext }) {
   const [gitlabs, setGitlabs] = useState([]);
   const [projects, setProjects] = useState([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
+  const [apiStatus, setApiStatus] = useState(null);
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
-    api.fetchGitLabs().then(setGitlabs).catch(() => {});
+    api.fetchGitLabs().then(setGitlabs).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -21,6 +22,12 @@ export default function SetupStep({ config, setConfig, onNext }) {
       .then(setProjects)
       .catch((e) => setStatus({ type: 'error', msg: `Gagal memuat proyek: ${e.message}` }))
       .finally(() => setLoadingProjects(false));
+  }, [config.instance_id]);
+
+  useEffect(() => {
+    api.fetchApiStatus(config.instance_id)
+      .then(setApiStatus)
+      .catch((e) => console.error("Gagal memuat API status:", e));
   }, [config.instance_id]);
 
   const canProceed = config.instance_id && config.project_id;
@@ -38,6 +45,35 @@ export default function SetupStep({ config, setConfig, onNext }) {
     <div className="card animate-fade-in">
       <div className="card-header">
         <h2 className="card-title">⚙️ Setup — Pilih Sumber Data</h2>
+      </div>
+      
+      {/* API Status Section */}
+      <div className="mb-4 p-4 border rounded bg-gray-50 flex items-center gap-4 text-sm flex-wrap">
+        <span className="font-semibold text-gray-700 mr-2">Status API:</span>
+        <div className="flex items-center gap-1">
+          <span className={apiStatus?.gitlab ? "text-green-500" : "text-gray-400"}>
+            {apiStatus?.gitlab ? "🟢" : "⚪"}
+          </span>
+          <span>GitLab</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className={apiStatus?.gemini ? "text-green-500" : "text-gray-400"}>
+            {apiStatus?.gemini ? "🟢" : "⚪"}
+          </span>
+          <span>Gemini</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className={apiStatus?.gdocs ? "text-green-500" : "text-gray-400"}>
+            {apiStatus?.gdocs ? "🟢" : "⚪"}
+          </span>
+          <span>Google Docs</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className={apiStatus?.drive ? "text-green-500" : "text-gray-400"}>
+            {apiStatus?.drive ? "🟢" : "⚪"}
+          </span>
+          <span>Google Drive</span>
+        </div>
       </div>
 
       <div className="flex flex-col gap-lg">
@@ -106,6 +142,33 @@ export default function SetupStep({ config, setConfig, onNext }) {
             placeholder="Contoh: Agustus 2026"
             value={config.month_year}
             onChange={(e) => setConfig({ ...config, month_year: e.target.value })}
+          />
+        </div>
+        
+        <div className="card-header mt-4">
+          <h3 className="text-lg font-semibold">Google Docs Settings</h3>
+        </div>
+        
+        <div className="form-group">
+          <label className="form-label">Mode Pembuatan Dokumen</label>
+          <select
+            className="select"
+            value={config.gdocs_mode}
+            onChange={(e) => setConfig({ ...config, gdocs_mode: e.target.value })}
+          >
+            <option value="direct">Direct Edit (Docs API - langsung edit dokumen asli)</option>
+            <option value="copy">Copy Template (Drive + Docs API - buat salinan dari template)</option>
+          </select>
+        </div>
+        
+        <div className="form-group">
+          <label className="form-label">Document ID Khusus (opsional)</label>
+          <input
+            type="text"
+            className="input"
+            placeholder="Biarkan kosong untuk menggunakan TARGET_DOC_ID dari .env"
+            value={config.gdocs_document_id}
+            onChange={(e) => setConfig({ ...config, gdocs_document_id: e.target.value })}
           />
         </div>
 

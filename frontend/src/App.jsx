@@ -5,20 +5,24 @@ import DataCheckStep from './components/DataCheckStep';
 import HITLStep1 from './components/HITLStep1';
 import HITLStep2 from './components/HITLStep2';
 import ResultStep from './components/ResultStep';
+import Settings from './components/Settings';
 import * as api from './api';
 
 const INITIAL_CONFIG = {
   instance_id: '',
   project_id: '',
-  start_date: '',
-  end_date: '',
-  month_year: '',
+  start_date: '2026-08-01',
+  end_date: '2026-08-31',
+  month_year: 'Agustus 2026',
+  gdocs_mode: 'direct',
+  gdocs_document_id: '',
 };
 
 export default function App() {
   const [currentStep, setCurrentStep] = useState(1);
   const [completedSteps, setCompletedSteps] = useState([]);
   const [config, setConfig] = useState(INITIAL_CONFIG);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Workflow state
   const [threadId, setThreadId] = useState(null);
@@ -262,17 +266,29 @@ export default function App() {
         <p className="text-sm text-muted" style={{ marginTop: '4px' }}>
           GitLab → AI Analysis → Google Docs — dengan Human-in-the-Loop Review
         </p>
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          style={{ marginTop: '12px', padding: '6px 12px', borderRadius: '20px', background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border)', cursor: 'pointer' }}
+        >
+          {showSettings ? 'Kembali ke Pipeline' : '⚙️ Settings (GitLab & LLM)'}
+        </button>
       </header>
 
-      {/* Stepper */}
-      <Stepper
-        currentStep={currentStep}
-        onStepClick={(s) => completedSteps.includes(s) && setCurrentStep(s)}
-        completedSteps={completedSteps}
-      />
+      {showSettings ? (
+        <Settings onClose={() => setShowSettings(false)} />
+      ) : (
+        <>
+          {/* Stepper */}
+          <Stepper
+            currentStep={currentStep}
+            onStepClick={(s) => completedSteps.includes(s) && setCurrentStep(s)}
+            completedSteps={completedSteps}
+          />
 
-      {/* Step Content */}
-      {renderStepContent()}
+          {/* Step Content */}
+          {renderStepContent()}
+        </>
+      )}
 
       {/* Footer */}
       <footer style={{

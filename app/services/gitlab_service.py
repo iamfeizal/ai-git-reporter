@@ -34,6 +34,7 @@ class GitLabService:
             "until": f"{end_date}T23:59:59Z",
             "with_stats": "true",
             "per_page": 100,
+            "all": "true",
         }
 
         all_commits = []

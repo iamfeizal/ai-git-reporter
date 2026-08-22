@@ -63,6 +63,8 @@ class StartWorkflowRequest(BaseModel):
     start_date: str
     end_date: str
     month_year: str = ""  # e.g., "Agustus 2026"
+    gdocs_mode: str = "direct"
+    gdocs_document_id: str = ""
 
 
 class ResumeWorkflowRequest(BaseModel):
@@ -111,6 +113,8 @@ def start_workflow(req: StartWorkflowRequest, db: Session = Depends(get_db)):
     # Build initial state
     initial_state = {
         "month_year": req.month_year or "",
+        "gdocs_mode": req.gdocs_mode,
+        "gdocs_document_id": req.gdocs_document_id,
         "raw_commits": normalized_commits,
         "classified_commits": [],
         "hitl_1_approved": False,

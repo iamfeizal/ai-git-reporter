@@ -117,3 +117,51 @@ def get_gitlab_projects(instance_id: int, db: Session = Depends(get_db)):
         return response.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch projects: {str(e)}")
+
+# --- API Status ---
+@router.get("/status")
+def get_api_status(instance_id: int = None, db: Session = Depends(get_db)):
+    """Check the health of all external APIs."""
+    status = {
+        "gemini": False,
+        "gdocs": False,
+        "drive": False,
+        "gitlab": False
+    }
+
+    # 1. Test Gemini
+    active_llm = db.query(LLMConfig).filter(LLMConfig.is_active == True).first()
+    if active_llm:
+        success, _ = test_llm_connection(
+            provider=active_llm.provider,
+            model_name=active_llm.model_name,
+            api_key=active_llm.api_key or "",
+            base_url=active_llm.base_url or ""
+        )
+        status["gemini"] = success
+
+    # 2. Test GDocs & Drive
+    try:
+        from app.services.gdocs_service import GDocsService
+        gdocs = GDocsService()
+        if gdocs.docs_service:
+            status["gdocs"] = True
+        if gdocs.drive_service:
+            status["drive"] = True
+    except Exception:
+        pass
+
+    # 3. Test GitLab
+    if instance_id:
+        instance = db.query(GitLabInstance).filter(GitLabInstance.id == instance_id).first()
+        if instance:
+            url = f"{instance.gitlab_url}/api/v4/version"
+            headers = {"PRIVATE-TOKEN": instance.token}
+            try:
+                res = requests.get(url, headers=headers, timeout=5)
+                if res.status_code == 200:
+                    status["gitlab"] = True
+            except Exception:
+                pass
+
+    return status

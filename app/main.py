@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 
 from app.services.gitlab_service import GitLabService
+from app.services.gdocs_service import GDocsService
 from app.core.database import engine, get_db, Base, init_db
 from app.core.workflow import app_workflow
 from app.core.state import NormalizedCommit

@@ -10,9 +10,10 @@ Built with **FastAPI**, **LangGraph**, **Google Gemini 3.5**, **Vite + React**, 
 - **Human-in-the-Loop (HITL) Workflow:** A 6-step interactive React UI that allows you to review data at critical checkpoints:
   - **L1 Review:** Drag-and-drop dual-column interface to classify commits between `SYSTEM_APP` and `SERVICE_APP`.
   - **L2 Review:** Tree-view cluster editor to rename, merge, or delete AI-generated semantic clusters before narrative generation.
+- **API Status Dashboard:** Real-time health indicators on the setup page to instantly verify GitLab, Gemini, Google Docs, and Google Drive connections.
 - **Stateful AI Pipeline (LangGraph):** Employs a multi-node LLM DAG pipeline running on a persistent state, using PostgresSaver to pause execution for human review and resume exactly where it left off.
 - **Tech-to-Business Translation (Few-Shot ICL):** Translates raw, technical git commits into formal, easy-to-understand business narratives. The system uses extracted Golden Samples for Few-Shot In-Context Learning to perfectly mimic your preferred writing style.
-- **Google Docs Rendering:** Uses the Google Docs and Drive APIs to dynamically create a master template (or copy an existing one), insert text with proper heading/bullet list formatting, and apply visual highlights for screenshot placeholders.
+- **Dual-Mode Google Docs Rendering:** Dynamically generates reports using the Google Docs and Drive APIs. Choose between **Direct Edit** (overwriting a single document) or **Copy Template** (auto-cloning a master template for each month).
 - **Premium User Interface:** A modern, dark-themed frontend built with Vite, React, and glassmorphism design principles.
 
 ## 🛠️ Tech Stack
@@ -61,14 +62,15 @@ GITLAB_TOKEN=glpat-xxxxxxxxx_xxxxxxxxxx
 GITLAB_URL=https://gitlab.com
 
 # Optional: Specific Template Document ID
-GDOCS_TEMPLATE_ID=your_google_docs_template_id
+TARGET_DOC_ID=your_google_docs_template_id
 ```
 
 ### 4. Setup Google Docs Service Account
 
 1. Rename your downloaded Google Cloud Service Account JSON file to `credentials.json`.
 2. Place `credentials.json` in the root directory of this project.
-3. If using an existing `GDOCS_TEMPLATE_ID`, open your template document, click **Share**, and invite the Service Account Email (e.g., `service-name@project.iam.gserviceaccount.com`) as an **Editor**.
+3. If using an existing `TARGET_DOC_ID`, open your template document, click **Share**, and invite the Service Account Email as an **Editor**.
+   > ⚠️ **Important:** Double-check the `client_email` inside your `credentials.json` file. You must share the document with that exact email address (pay attention to the project ID number) to avoid `403 Permission Denied` errors.
 
 ### 5. Run the Application
 

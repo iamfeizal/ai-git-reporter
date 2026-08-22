@@ -29,7 +29,7 @@ install:
 	$(PIP) install -r requirements.txt
 
 run:
-	$(UVICORN) app.main:app --reload
+	uvicorn app.main:app --reload
 
 frontend-install:
 	cd frontend && npm install

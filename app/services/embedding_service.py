@@ -10,7 +10,7 @@ from typing import List, Tuple
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import AgglomerativeClustering
 
-import google.generativeai as genai
+import google.genai as genai
 from dotenv import load_dotenv
 
 from app.core.state import NormalizedCommit

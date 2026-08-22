@@ -268,7 +268,14 @@ Tuliskan Executive Summary:""")
         "cluster_overview": cluster_overview,
     })
 
-    return {"executive_summary": response.content}
+    content = response.content
+    if isinstance(content, list):
+        # Extract text from list of parts (e.g. [{"type": "text", "text": "..."}])
+        exec_summary_text = "".join([part.get("text", "") if isinstance(part, dict) else str(part) for part in content])
+    else:
+        exec_summary_text = str(content)
+
+    return {"executive_summary": exec_summary_text}
 
 
 # =====================================================================
@@ -374,14 +381,15 @@ def generate_document_node(state: ReportState) -> dict:
             logger.warning("GDocsService tidak dikonfigurasi, skip document generation.")
             return {"document_url": ""}
             
-        # Try to get template ID from env, or create a new template on the fly
-        template_id = os.getenv("GDOCS_TEMPLATE_ID")
-        if not template_id:
+        gdocs_mode = state.get("gdocs_mode", "direct")
+        target_doc_id = state.get("gdocs_document_id") or os.getenv("TARGET_DOC_ID") or os.getenv("GDOCS_TEMPLATE_ID")
+        
+        if not target_doc_id:
             logger.info("[Node: generate_document] Tidak ada template_id, membuat template baru...")
-            template_id = gdocs_service.create_template_document()
+            target_doc_id = gdocs_service.create_template_document()
             
-        url = gdocs_service.generate_report_from_template(template_id, state)
-        logger.info(f"[Node: generate_document] Dokumen berhasil dibuat: {url}")
+        url = gdocs_service.generate_report_from_template(target_doc_id, state, mode=gdocs_mode)
+        logger.info(f"[Node: generate_document] Dokumen berhasil dibuat/diperbarui: {url}")
         return {"document_url": url}
     except Exception as e:
         logger.error(f"Gagal membuat dokumen: {e}")

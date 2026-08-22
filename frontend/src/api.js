@@ -34,6 +34,7 @@ export const fetchGitLabs = () => request('/config/gitlab');
 export const createGitLab = (instance) => request('/config/gitlab', { method: 'POST', body: JSON.stringify(instance) });
 export const deleteGitLab = (id) => request(`/config/gitlab/${id}`, { method: 'DELETE' });
 export const fetchProjects = (instanceId) => request(`/config/gitlab/${instanceId}/projects`);
+export const fetchApiStatus = (instanceId) => request(`/config/status${instanceId ? `?instance_id=${instanceId}` : ''}`);
 
 // --- Test GitLab commits ---
 export const testGitLabCommits = (params) => {
