@@ -1,8 +1,12 @@
-from typing import TypedDict, List, Optional, Literal, Annotated
+"""
+State Models for AI Report System (Super App & LangGraph Stateful Workflow).
+"""
+from typing import TypedDict, List, Optional, Literal
 from pydantic import BaseModel, Field
 
+
 # -------------------------------------------------------------------
-# 1. Normalized Commit Data (from GitLab ingestion, post-filter)
+# 1. Normalized Commit Data
 # -------------------------------------------------------------------
 class NormalizedCommit(BaseModel):
     """Full normalized commit data from GitLab, after noise filtering."""
@@ -13,20 +17,23 @@ class NormalizedCommit(BaseModel):
     committed_date: str = Field(default="")
     stats_additions: int = Field(default=0)
     stats_deletions: int = Field(default=0)
-    # Parsed Conventional Commit fields (pre-parsed in ingestion)
+    # Parsed Conventional Commit fields
     cc_type: Optional[str] = Field(None, description="Conventional Commit type (feat, fix, chore, etc.)")
     cc_scope: Optional[str] = Field(None, description="Conventional Commit scope")
     cc_subject: Optional[str] = Field(None, description="Conventional Commit subject")
     cc_is_conventional: bool = Field(default=False)
+    custom_note: Optional[str] = Field(default=None, description="Catatan modifikasi dari user")
 
 
 # -------------------------------------------------------------------
-# 2. Backward-compat alias for existing workflow code
+# 2. Sub-Domain Layanan Aplikasi (Super App Modules)
 # -------------------------------------------------------------------
-class CommitData(BaseModel):
-    """Simplified commit data for LLM processing (backward compat)."""
-    id: str
-    message: str
+class ServiceSubDomain(BaseModel):
+    """Sub-domain representing an app/module/service within the Super App."""
+    sub_domain_id: str = Field(..., description="Unique slug or identifier, e.g. 'presensi', 'pembayaran'")
+    sub_domain_name: str = Field(..., description="Nama Layanan/Modul, e.g. 'Layanan Presensi Online'")
+    description: Optional[str] = Field(default=None, description="Deskripsi singkat modul layanan")
+    commit_ids: List[str] = Field(default_factory=list, description="List short_id commit yang masuk")
 
 
 # -------------------------------------------------------------------
@@ -34,97 +41,121 @@ class CommitData(BaseModel):
 # -------------------------------------------------------------------
 class ClassifiedCommit(BaseModel):
     id: str
-    category: str = Field(description="Harus bernilai 'SYSTEM_APP' atau 'SERVICE_APP'")
-    reason: str = Field(description="Alasan singkat 1 kalimat kenapa masuk kategori tersebut")
+    category: Literal["SYSTEM_CORE", "APP_SERVICE", "SYSTEM_APP", "SERVICE_APP"] = Field(
+        default="SYSTEM_CORE",
+        description="SYSTEM_CORE (Inti Sistem) atau APP_SERVICE (Layanan Aplikasi)"
+    )
+    sub_domain_id: Optional[str] = Field(default=None, description="ID sub-domain jika APP_SERVICE")
+    sub_domain_name: Optional[str] = Field(default=None, description="Nama sub-domain jika APP_SERVICE")
+    reason: str = Field(default="", description="Alasan singkat 1 kalimat")
 
 
 class L1ClassificationResult(BaseModel):
     results: List[ClassifiedCommit]
+    detected_sub_domains: List[ServiceSubDomain] = Field(default_factory=list)
 
 
 # -------------------------------------------------------------------
-# 4. Klasifikasi Level 2 & Clustering
+# 4. Granular Semantic Sub-Clustering (4-Level Hierarchy)
 # -------------------------------------------------------------------
-class L2ClassifiedCommit(BaseModel):
-    """Commit with both L1 and L2 classification."""
-    id: str
-    category_level_1: Literal["SYSTEM_APP", "SERVICE_APP"]
-    category_level_2: Literal["FEATURE_UI", "BUG_FIX", "REFACTOR_PERF", "INFRA_CHORE"]
-    reason: str = Field(description="Alasan sub-kategorisasi")
+class SubClusterItem(BaseModel):
+    """Granular functional sub-cluster (specific user story / feature unit)."""
+    sub_cluster_id: str = Field(..., description="ID unik sub-cluster")
+    sub_cluster_title: str = Field(..., description="Judul tema fungsional spesifik (maks 8 kata)")
+    functional_scope: str = Field(default="", description="Cakupan fungsi atau masalah spesifik")
+    commit_ids: List[str] = Field(default_factory=list, description="Daftar commit short_id dalam sub-cluster")
 
 
-class L2ClassificationResult(BaseModel):
-    results: List[L2ClassifiedCommit]
+class ContextCluster(BaseModel):
+    """Cluster of related context/module under Conventional Commit categories."""
+    cluster_id: str = Field(..., description="ID unik cluster konteks")
+    cluster_title: str = Field(..., description="Judul Cluster Konteks Modul")
+    category_level_1: Literal["SYSTEM_CORE", "APP_SERVICE", "SYSTEM_APP", "SERVICE_APP"] = "SYSTEM_CORE"
+    sub_domain_id: Optional[str] = Field(default=None, description="ID sub-domain jika APP_SERVICE")
+    category_level_2: Literal["FEATURE_UI", "BUG_FIX", "REFACTOR_PERF", "INFRA_CHORE"] = "FEATURE_UI"
+    sub_clusters: List[SubClusterItem] = Field(default_factory=list)
 
 
+# Backward-compat classes for legacy / test wrappers
 class CommitCluster(BaseModel):
-    """A semantic cluster of related commits (before narration)."""
-    cluster_title: str = Field(..., description="Judul tema cluster pendek (maks 5 kata)")
+    cluster_title: str
     commit_ids: List[str]
-    category_level_1: Literal["SYSTEM_APP", "SERVICE_APP"]
-    category_level_2: Literal["FEATURE_UI", "BUG_FIX", "REFACTOR_PERF", "INFRA_CHORE"]
+    category_level_1: str = "SYSTEM_CORE"
+    category_level_2: str = "FEATURE_UI"
 
 
-class ClusteringResult(BaseModel):
-    clusters: List[CommitCluster]
-
-
-# -------------------------------------------------------------------
-# 5. Content Cluster (post-narration, final output per cluster)
-# -------------------------------------------------------------------
 class ContentCluster(BaseModel):
-    cluster_title: str = Field(..., description="Judul tema cluster pendek (maks 5 kata), misal: 'Pembaruan Modul Pembayaran'")
-    commit_ids: List[str] = Field(..., description="Daftar ID commit yang masuk ke cluster ini")
-    category_level_1: Literal["SYSTEM_APP", "SERVICE_APP"]
-    category_level_2: Literal["FEATURE_UI", "BUG_FIX", "REFACTOR_PERF", "INFRA_CHORE"]
-    business_narrative: str = Field(..., description="Narasi detail bahasa formal non-teknis, minimal 3 kalimat. Hindari jargon teknis mentah.")
-    requires_visual: bool = Field(default=False)
-    visual_placeholder_note: Optional[str] = Field(default=None, description="Instruksi gambar jika requires_visual = True")
+    cluster_title: str
+    commit_ids: List[str]
+    category_level_1: str = "SYSTEM_CORE"
+    category_level_2: str = "FEATURE_UI"
+    business_narrative: str
+    requires_visual: bool = False
+    visual_placeholder_note: Optional[str] = None
 
 
 class ClusterResult(BaseModel):
-    """Legacy wrapper for backward compat."""
     clusters: List[ContentCluster]
 
 
 # -------------------------------------------------------------------
-# 6. Monthly Report Schema (full output, matches GUIDELINES §3)
+# 5. Narasi Detail Sub-Cluster (Balanced Tech-to-Business)
 # -------------------------------------------------------------------
-class MonthlyReportSchema(BaseModel):
-    month_year: str
-    executive_summary: str = Field(..., description="Ringkasan eksekutif 2-3 paragraf")
-    system_app_narratives: List[ContentCluster] = Field(default_factory=list)
-    service_app_narratives: List[ContentCluster] = Field(default_factory=list)
+class SubClusterNarrationOutput(BaseModel):
+    """Output generated for each sub-cluster during looping generation."""
+    sub_cluster_id: str
+    sub_cluster_title: str
+    cluster_id: Optional[str] = None
+    cluster_title: Optional[str] = None
+    category_level_1: Optional[str] = None
+    sub_domain_id: Optional[str] = None
+    category_level_2: Optional[str] = None
+    business_narrative: str = Field(
+        ...,
+        description="Narasi detail bahasa formal Indonesia yang seimbang, mempertahankan nama fungsi asli dan istilah kunci"
+    )
+    key_technical_terms_preserved: List[str] = Field(
+        default_factory=list,
+        description="Nama fungsi asli atau endpoint API yang dipertahankan dalam narasi"
+    )
+    requires_visual: bool = Field(default=False)
+    visual_placeholder_note: Optional[str] = Field(default=None)
+    commit_ids: List[str] = Field(default_factory=list)
 
 
 # -------------------------------------------------------------------
-# 7. LangGraph State — Full Pipeline State
+# 6. LangGraph State — Full Pipeline State
 # -------------------------------------------------------------------
-class ReportState(TypedDict):
+class ReportState(TypedDict, total=False):
     # Input
     month_year: str
     gdocs_mode: str
     gdocs_document_id: str
     raw_commits: List[NormalizedCommit]
-    
-    # Tahap 2: L1 Classification
+
+    # Tahap 2: L1 Classification & Sub-Domains
+    service_sub_domains: List[ServiceSubDomain]
     classified_commits: List[ClassifiedCommit]
-    
-    # HITL 1: User corrections applied
+
+    # HITL 1: User corrections
     hitl_1_approved: bool
-    
-    # Tahap 4: L2 Classification + Clustering
-    l2_classified: List[L2ClassifiedCommit]
+
+    # Tahap 4: Granular Sub-Clustering
+    core_system_clusters: List[ContextCluster]
+    service_app_clusters: List[ContextCluster]
+    # Legacy alias for backward compat
     clusters: List[CommitCluster]
-    
-    # HITL 2: User corrections applied
+
+    # HITL 2: User corrections
     hitl_2_approved: bool
-    
+
     # Tahap 6: Executive Summary
     executive_summary: str
-    
-    # Tahap 7: Final narrated clusters
+
+    # Tahap 7 & 8: Looping Narratives & Docs Progress
+    final_narratives: List[SubClusterNarrationOutput]
+    # Legacy alias
     final_clusters: List[ContentCluster]
-    
-    # Tahap 8: Document IR / Output
+    completed_sub_cluster_ids: List[str]
     document_url: str
+    progress_message: str

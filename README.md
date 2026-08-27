@@ -1,104 +1,84 @@
-# 🤖 AI Git Reporter (Commit-to-Docs AI Agent)
+# 🤖 AI Git Reporter (Super App Edition)
 
-An enterprise-grade, stateful AI agent that automates the generation of monthly technical reports. It ingests raw commits from GitLab, categorizes them, groups them into semantic features, generates professional business narratives using Large Language Models (LLM) with Few-Shot In-Context Learning (ICL), and exports the final formatted report directly into Google Docs.
+An enterprise-grade, stateful AI agent that automates the generation of monthly technical reports from GitLab repository activity to Google Docs. Designed specifically for **Super App** and multi-module architectures, it leverages **LangGraph**, **Gemini 2.5/3.5**, **4-Level Granular Semantic Sub-Clustering**, and **Human-in-the-Loop (HITL) Checkpoints with full CRUD capabilities**.
 
-Built with **FastAPI**, **LangGraph**, **Google Gemini 3.5**, **Vite + React**, and **PostgreSQL (pgvector)**, and is fully containerized using **Docker**.
+Built with **FastAPI**, **LangGraph**, **Google Gemini**, **Vite + React**, and **PostgreSQL (pgvector)**, containerized with **Docker**.
+
+---
 
 ## 🌟 Key Features
 
-- **Automated Data Ingestion & Filtering:** Fetches commit histories via the GitLab REST API, with built-in pagination, Conventional Commits parsing, and noise filtering (e.g., bot commits).
-- **Human-in-the-Loop (HITL) Workflow:** A 6-step interactive React UI that allows you to review data at critical checkpoints:
-  - **L1 Review:** Drag-and-drop dual-column interface to classify commits between `SYSTEM_APP` and `SERVICE_APP`.
-  - **L2 Review:** Tree-view cluster editor to rename, merge, or delete AI-generated semantic clusters before narrative generation.
-- **API Status Dashboard:** Real-time health indicators on the setup page to instantly verify GitLab, Gemini, Google Docs, and Google Drive connections.
-- **Stateful AI Pipeline (LangGraph):** Employs a multi-node LLM DAG pipeline running on a persistent state, using PostgresSaver to pause execution for human review and resume exactly where it left off.
-- **Tech-to-Business Translation (Few-Shot ICL):** Translates raw, technical git commits into formal, easy-to-understand business narratives. The system uses extracted Golden Samples for Few-Shot In-Context Learning to perfectly mimic your preferred writing style.
-- **Dual-Mode Google Docs Rendering:** Dynamically generates reports using the Google Docs and Drive APIs. Choose between **Direct Edit** (overwriting a single document) or **Copy Template** (auto-cloning a master template for each month).
-- **Premium User Interface:** A modern, dark-themed frontend built with Vite, React, and glassmorphism design principles.
+- **Automated Ingestion & Noise Filtering:** Fetches commit histories via GitLab REST API v4, with built-in Conventional Commits parsing, scope extraction, and automated noise filtering (e.g., bot commits, merge requests, version bumps).
+- **Super App Sub-Domain Auto-Detection:** Automatically extracts sub-domains (e.g., *Layanan Presensi*, *Layanan Pembayaran*, *Layanan Helpdesk*) from commit scopes and directory paths.
+- **HITL Checkpoint 1 (L1 Domain & Sub-Domain CRUD):**
+  - Interactive dual-column interface to classify commits between **Sistem Inti Aplikasi (Core Platform)** and **Layanan Aplikasi (Super App Modules)**.
+  - **Full CRUD on Sub-Domains:** Create new service modules, rename modules, delete modules with commit reassignment, and reorder priority.
+- **4-Level Granular Semantic Sub-Clustering:**
+  - Prevents broad/macro clustering by enforcing a strict 4-level hierarchy:
+    `Domain / Sub-Domain` $\rightarrow$ `Conventional Category (feat, fix, refactor, chore)` $\rightarrow$ `Context Cluster (Modul)` $\rightarrow$ `Sub-Cluster Fungsional Spesifik (Feature Unit)` $\rightarrow$ `Commit Items`.
+- **HITL Checkpoint 2 (L2 Tree Explorer & CRUD):**
+  - **Commit CRUD:** Edit commit context/notes, move commits between sub-clusters, add manual tasks/offline hotfixes, and exclude commits.
+  - **Sub-Cluster CRUD:** Add new sub-clusters, rename titles, split overcrowded sub-clusters into two, merge related sub-clusters, and delete.
+- **Balanced Tech-to-Business Translation:**
+  - Generates formal, professional Indonesian narratives suitable for executive management.
+  - **Preserves Critical Technical Identifiers:** Retains original function names (e.g., `handleStockLock()`) and API endpoints (`/v1/orders`) formatted with **monospace code styling**, and important technologies/protocols (**OAuth 2.0**, **Redis**, **JWT**) in **bold**.
+  - Automatically inserts highlight-styled visual placeholders `[TAMBAHKAN GAMBAR/DOKUMENTASI - Keterangan: ...]`.
+- **Iterative Sub-Cluster Worker Loop & Google Docs Sync:**
+  - Avoids single giant batch prompts by looping through sub-clusters individually.
+  - Appends each sub-cluster section directly into Google Docs via `batchUpdate`, updates LangGraph checkpoints, and streams real-time progress events.
+  - Full **fault-tolerance & resume capability** if network interruptions occur.
+
+---
 
 ## 🛠️ Tech Stack
 
-- **Frontend:** React, Vite, Vanilla CSS
-- **Backend:** Python 3.11, FastAPI
-- **AI / Agentic Workflow:** Google Gemini, LangGraph, LangChain, Tenacity (Resiliency)
-- **Database:** PostgreSQL with `pgvector` extension, SQLAlchemy
-- **Integrations:** GitLab API v4, Google Docs API
+- **Frontend:** React, Vite, Vanilla CSS (Premium Dark Theme with Glassmorphism)
+- **Backend:** Python 3.11, FastAPI, Uvicorn
+- **Orchestration & AI:** LangGraph, LangChain Core, Google Gemini (2.5 / 3.5 Flash)
+- **State Persistence:** PostgreSQL with `pgvector` & `PostgresSaver` (SQLite fallback for dev)
+- **Integrations:** GitLab REST API v4, Google Docs API v1, Google Drive API v3
 - **Infrastructure:** Docker, Docker Compose, Makefile
 
 ---
 
-## 🚀 Getting Started (Initial Setup)
-
-Follow these steps to run the system on your local machine or server.
+## 🚀 Getting Started
 
 ### 1. Prerequisites
 
-Before you begin, ensure you have the following installed and ready:
-
-- **Docker & Docker Compose** installed on your machine.
-- **GitLab Personal Access Token (PAT)** with `read_api` and `read_repository` permissions.
+- **Docker & Docker Compose** (or Python 3.11 with Conda/venv + Node.js 18+).
+- **GitLab Personal Access Token (PAT)** with `read_api` and `read_repository` scopes.
 - **Gemini API Key** from Google AI Studio.
-- **Google Cloud Service Account** (with a downloaded JSON key) with Docs and Drive API enabled.
-- **Node.js** (if running the frontend locally without Docker).
+- **Google Cloud Service Account (`credentials.json`)** with Docs and Drive API enabled.
 
-### 2. Clone the Repository
+### 2. Setup Environment Variables
 
-```bash
-git clone https://github.com/yourusername/ai-gitlab-reporter.git
-cd ai-gitlab-reporter
-```
-
-### 3. Setup Environment Variables
-
-Create a `.env` file in the root directory and configure it with your credentials:
+Create a `.env` file in the project root:
 
 ```env
 # Database Configuration (Docker)
-DATABASE_URL=postgresql://user:password@vectordb:5432/vectordb
+DATABASE_URL=postgresql://user:password@localhost:5432/vectordb
 
-# Optional: Pre-configured API Keys (Can also be set in the UI)
+# API Keys & Defaults
 GEMINI_API_KEY=AIzaSyxxxxxxxxxxxxxxxxx
 GITLAB_TOKEN=glpat-xxxxxxxxx_xxxxxxxxxx
 GITLAB_URL=https://gitlab.com
 
-# Optional: Specific Template Document ID
+# Optional: Master Google Docs Template ID
 TARGET_DOC_ID=your_google_docs_template_id
 ```
 
-### 4. Setup Google Docs Service Account
+### 3. Setup Google Docs Service Account
 
-1. Rename your downloaded Google Cloud Service Account JSON file to `credentials.json`.
-2. Place `credentials.json` in the root directory of this project.
-3. If using an existing `TARGET_DOC_ID`, open your template document, click **Share**, and invite the Service Account Email as an **Editor**.
-   > ⚠️ **Important:** Double-check the `client_email` inside your `credentials.json` file. You must share the document with that exact email address (pay attention to the project ID number) to avoid `403 Permission Denied` errors.
+1. Place your Google Cloud Service Account JSON file as `credentials.json` in the root directory.
+2. If using a master template doc (`TARGET_DOC_ID`), share the document with the `client_email` listed in `credentials.json` with **Editor** permissions.
 
-### 5. Run the Application
+### 4. Running the Application
 
-You can use the provided `Makefile` to easily run the application.
-
-#### Option A: Using Docker (Backend + DB) and Local Frontend (Recommended for Dev)
-
-**Terminal 1 (Backend & Database):**
-```bash
-# Starts PostgreSQL (pgvector) and the FastAPI backend
-make docker-up
-```
-
-**Terminal 2 (Frontend):**
-```bash
-# Starts the Vite + React frontend server
-make frontend-dev
-```
-
-#### Option B: Running Entirely Locally (Without Docker)
-
-You can run the application directly using Anaconda/Miniconda or a standard virtual environment. If `DATABASE_URL` is omitted, the system will fallback to an internal SQLite database (Note: `pgvector` embedding storage requires PostgreSQL).
+#### Option A: Running with Conda Environment (`reporter_env`)
 
 **Terminal 1 (Backend):**
 ```bash
 conda activate reporter_env
-# Or standard venv: source venv/bin/activate
-
 pip install -r requirements.txt
 make run
 ```
@@ -108,24 +88,77 @@ make run
 make frontend-dev
 ```
 
-### 6. Usage
+#### Option B: Running with Docker (Backend & Database)
 
-Once the servers are running:
+```bash
+make docker-up
+```
 
-1. Open your web browser and navigate to: **`http://localhost:5173`**
-2. **Setup Step**: Enter your GitLab credentials, Gemini API key, and select the target project.
-3. **Data Check**: Choose the date range. The system will fetch, parse, and filter your commits.
-4. **L1 Review**: Review the AI's classification of `SYSTEM_APP` vs `SERVICE_APP`. Drag and drop commits to correct any misclassifications.
-5. **L2 Review**: Review the semantic clusters generated via `text-embedding-004`. Use the tree-view editor to rename or reorganize clusters.
-6. **Generate**: The AI will generate the executive summary and business narratives using Few-Shot ICL.
-7. **Result**: Click the generated Google Docs link to view your fully formatted monthly report!
+---
+
+## 📖 Step-by-Step Workflow
+
+1. **Setup & Config (`http://localhost:5173`)**: Input GitLab token, select project, and set the target report month.
+2. **Data Ingestion**: System fetches git commits, strips bot noise, and pre-parses Conventional Commits (`type`, `scope`, `subject`).
+3. **HITL Checkpoint 1 (Domain & Sub-Domain Review)**:
+   - Review AI classification: **Sistem Inti Aplikasi** vs **Layanan Aplikasi**.
+   - Manage Super App modules (Add new sub-domain, rename, or reassign commits).
+4. **HITL Checkpoint 2 (4-Level Tree & Sub-Cluster Review)**:
+   - Review granular sub-clusters under each conventional commit category.
+   - Perform CRUD: Edit/rename titles, split overcrowded sub-clusters, add manual tasks, or move commits.
+5. **Executive Summary & Looping Generation**:
+   - AI generates a high-level 2-3 paragraph executive summary.
+   - Looping worker generates balanced narratives per sub-cluster and streams updates directly to Google Docs.
+6. **Final Result**: Open the generated Google Docs report URL with all headings, monospace code identifiers, and visual placeholders pre-rendered!
+
+---
+
+## 🧪 Developer Utilities & Scratch Scripts (`scratch/`)
+
+The [`scratch/`](file:///Users/imamaf/Development/Personal/ai-reporter/scratch) folder contains standalone utility scripts for verification, smoke testing, and sample analysis:
+
+```
+scratch/
+├── test_workflow_graph.py   # StateGraph & Pydantic model integrity verification
+├── test_gdocs_copy.py       # Google Drive API & template cloning smoke test
+└── inspect_docx.py          # Reference .docx sample reader & formatting inspector
+```
+
+### 1. Test LangGraph Workflow & State Models
+Verifies that all Pydantic state models (`ServiceSubDomain`, `ContextCluster`, `SubClusterItem`, `SubClusterNarrationOutput`) and LangGraph StateGraph DAG compile correctly:
+
+```bash
+conda run -n reporter_env python scratch/test_workflow_graph.py
+```
+*Output:*
+```
+Testing models...
+Models verified successfully!
+Testing graph compilation...
+LangGraph workflow compiled successfully!
+All checks passed!
+```
+
+### 2. Test Google Drive & Docs Integration
+Smoke tests authentication using `credentials.json` and verifies permissions to copy/modify the template document:
+
+```bash
+conda run -n reporter_env python scratch/test_gdocs_copy.py
+```
+
+### 3. Inspect Reference Sample Documents
+Reads and inspects paragraph hierarchies and styles from sample `.docx` golden files in `sample_data/`:
+
+```bash
+conda run -n reporter_env python scratch/inspect_docx.py
+```
+
+---
 
 ## 🛑 Stopping the Application
 
-To safely stop the application and database containers:
+To stop all background services and containers:
 
 ```bash
 make docker-down
 ```
-
-*(Your vector database data and system configurations are preserved safely in Docker volumes and local SQLite files).*

@@ -1,52 +1,67 @@
 """
-LangGraph Workflow — Multi-Node Stateful Pipeline with HITL Interrupts.
+LangGraph Workflow — Multi-Node Stateful Pipeline for Super App Reporting System.
 
 Pipeline:
-  START → classify_l1 → [HITL_1 interrupt] → classify_l2_and_cluster
-        → [HITL_2 interrupt] → generate_summary → generate_narratives → END
+  START → classify_l1 → [HITL_1 interrupt] → classify_l2_and_subcluster
+        → [HITL_2 interrupt] → generate_summary → generate_narratives_and_docs_loop → END
 
-Uses PostgresSaver for checkpoint persistence (HITL pause/resume).
+Features:
+- Sub-domain auto-detection & CRUD for Super App
+- 4-Level Granular Semantic Sub-Clustering
+- Balanced Tech-to-Business Translation
+- Incremental Looping Sub-Cluster Worker to Google Docs
 """
 import os
-from typing import List
+import uuid
+from typing import List, Dict, Any, Optional
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.types import interrupt, Command
+from langgraph.types import interrupt
 from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
 
 from app.core.state import (
     ReportState,
     NormalizedCommit,
     ClassifiedCommit,
     L1ClassificationResult,
-    L2ClassifiedCommit,
-    L2ClassificationResult,
+    ServiceSubDomain,
+    SubClusterItem,
+    ContextCluster,
+    SubClusterNarrationOutput,
     CommitCluster,
-    ClusteringResult,
     ContentCluster,
-    ClusterResult,
 )
 from app.services.llm_service import get_llm
 from app.services.embedding_service import cluster_commits_by_similarity
+from app.services.gdocs_service import GDocsService
 from app.core.logger import logger
 
 
 # =====================================================================
-# NODE 1: Klasifikasi Level 1 — SYSTEM_APP vs SERVICE_APP
+# NODE 1: Klasifikasi Level 1 — SYSTEM_CORE vs APP_SERVICE & Sub-Domains
 # =====================================================================
 def classify_l1_node(state: ReportState) -> dict:
-    """Classify each commit into SYSTEM_APP or SERVICE_APP using LLM structured output."""
-    commits = state["raw_commits"]
+    """
+    Classify each commit into SYSTEM_CORE or APP_SERVICE.
+    Automatically extracts sub-domains (modules/apps in Super App) for APP_SERVICE commits.
+    """
+    commits = state.get("raw_commits", [])
     if not commits:
-        return {"classified_commits": []}
+        return {"classified_commits": [], "service_sub_domains": []}
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """Anda adalah AI Architect Senior. Tugas Anda mengklasifikasikan daftar git commit ke dalam 2 kategori:
-1. 'SYSTEM_APP': Perubahan pada aplikasi, fitur baru, antarmuka (UI/UX), perbaikan bug kode, optimalisasi kueri database, atau business logic.
-2. 'SERVICE_APP': Perubahan pada infrastruktur, Docker, CI/CD pipeline, konfigurasi server, SSL/kredensial, deployment script, atau konfigurasi web server/proxy.
+        ("system", """Anda adalah Senior Software Architect untuk ekosistem Super App.
+Tugas Anda adalah mengklasifikasikan daftar git commit ke dalam 2 domain utama:
+1. 'SYSTEM_CORE': Perubahan fondasi sistem inti bersama, core framework, global state, base UI kit / design system, middleware sentral, atau keamanan platform global.
+2. 'APP_SERVICE': Seluruh modul bisnis, aplikasi, atau layanan spesifik yang berjalan di dalam Super App (contoh: Presensi, Pembayaran, Tiket Helpdesk, Pengadaan, Notifikasi, dsb).
 
-Klasifikasikan SETIAP commit. Berikan alasan singkat (1 kalimat) kenapa commit tersebut masuk ke kategori yang dipilih."""),
-        ("user", "Data git commit (ID | Title | Message):\n{commits_text}")
+Jika sebuah commit masuk ke 'APP_SERVICE':
+- Tentukan 'sub_domain_id' berupa slug pendek (contoh: 'presensi', 'pembayaran', 'helpdesk', 'pengadaan', 'auth').
+- Tentukan 'sub_domain_name' dalam bahasa Indonesia formal (contoh: 'Layanan Presensi Online', 'Layanan Pembayaran & Dompet Digital').
+
+Buat juga daftar 'detected_sub_domains' unik yang memuat sub_domain_id, sub_domain_name, dan daftar commit ID yang masuk ke modul tersebut."""),
+        ("user", "Data git commit (ID | Scope | Subject | Message):\n{commits_text}")
     ])
 
     llm = get_llm()
@@ -54,154 +69,265 @@ Klasifikasikan SETIAP commit. Berikan alasan singkat (1 kalimat) kenapa commit t
     chain = prompt | structured_llm
 
     commits_text = "\n".join([
-        f"[{c.short_id}] {c.title}" + (f" — {c.message[:100]}" if c.message and c.message != c.title else "")
+        f"[{c.short_id}] (scope: {c.cc_scope or '-'}) {c.title}" + (f" | {c.message[:100]}" if c.message and c.message != c.title else "")
         for c in commits
     ])
 
-    logger.info(f"[Node: classify_l1] Mengklasifikasikan {len(commits)} commit...")
-    response = chain.invoke({"commits_text": commits_text})
-    return {"classified_commits": response.results}
+    logger.info(f"[Node: classify_l1] Mengklasifikasikan {len(commits)} commit dan mendeteksi sub-domain...")
+    try:
+        response = chain.invoke({"commits_text": commits_text})
+        results = response.results
+        sub_domains = response.detected_sub_domains
+
+        # If sub_domains list was empty or incomplete, aggregate from results
+        if not sub_domains:
+            sd_map: Dict[str, ServiceSubDomain] = {}
+            for r in results:
+                if r.category == "APP_SERVICE" and r.sub_domain_id:
+                    sid = r.sub_domain_id.lower().strip()
+                    sname = r.sub_domain_name or f"Layanan {sid.title()}"
+                    if sid not in sd_map:
+                        sd_map[sid] = ServiceSubDomain(sub_domain_id=sid, sub_domain_name=sname, commit_ids=[])
+                    sd_map[sid].commit_ids.append(r.id)
+            sub_domains = list(sd_map.values())
+
+        return {
+            "classified_commits": results,
+            "service_sub_domains": sub_domains
+        }
+    except Exception as e:
+        logger.error(f"[Node: classify_l1] Error during classification: {e}")
+        # Fallback simple classification
+        fallback_results = [
+            ClassifiedCommit(
+                id=c.short_id,
+                category="APP_SERVICE" if c.cc_scope else "SYSTEM_CORE",
+                sub_domain_id=c.cc_scope.lower() if c.cc_scope else None,
+                sub_domain_name=f"Layanan {c.cc_scope.title()}" if c.cc_scope else None,
+                reason="Auto fallback rule"
+            )
+            for c in commits
+        ]
+        return {"classified_commits": fallback_results, "service_sub_domains": []}
 
 
 # =====================================================================
-# NODE 2: HITL Checkpoint 1 — User reviews L1 classification
+# NODE 2: HITL Checkpoint 1 — User reviews & CRUD on Sub-Domains
 # =====================================================================
 def hitl_checkpoint_1_node(state: ReportState) -> dict:
     """
     Human-in-the-Loop Checkpoint 1.
-    Pauses execution and presents L1 classification for user review.
-    User can re-classify commits before continuing.
+    Pauses execution and presents L1 classification & sub-domains for user review.
+    Supports full CRUD on sub-domains and moving commits between domains.
     """
-    classified = state["classified_commits"]
-    
-    # Prepare review data for the frontend
-    system_app = [c for c in classified if c.category == "SYSTEM_APP"]
-    service_app = [c for c in classified if c.category == "SERVICE_APP"]
-    
-    # Dynamic interrupt — pauses graph and sends data to the user
+    classified = state.get("classified_commits", [])
+    sub_domains = state.get("service_sub_domains", [])
+    raw_commits = {c.short_id: c for c in state.get("raw_commits", [])}
+
+    system_core = [c for c in classified if c.category in ("SYSTEM_CORE", "SYSTEM_APP")]
+    service_app = [c for c in classified if c.category in ("APP_SERVICE", "SERVICE_APP")]
+
     user_response = interrupt({
         "type": "hitl_l1_review",
-        "message": f"Review klasifikasi L1: {len(system_app)} SYSTEM_APP, {len(service_app)} SERVICE_APP",
-        "system_app_commits": [c.model_dump() for c in system_app],
-        "service_app_commits": [c.model_dump() for c in service_app],
+        "message": f"Review L1 & Sub-Domain Layanan: {len(system_core)} Sistem Inti, {len(service_app)} Layanan Aplikasi ({len(sub_domains)} sub-domain)",
+        "system_core_commits": [
+            {**c.model_dump(), "title": raw_commits.get(c.id, NormalizedCommit(short_id=c.id, title=c.id)).title}
+            for c in system_core
+        ],
+        "service_app_commits": [
+            {**c.model_dump(), "title": raw_commits.get(c.id, NormalizedCommit(short_id=c.id, title=c.id)).title}
+            for c in service_app
+        ],
+        "service_sub_domains": [sd.model_dump() for sd in sub_domains],
     })
-    
-    # user_response contains the corrected classifications from the frontend
+
     if user_response and isinstance(user_response, dict):
-        corrected = user_response.get("corrected_commits", None)
-        if corrected:
-            # Rebuild classified commits from user corrections
-            new_classified = [ClassifiedCommit(**c) for c in corrected]
-            return {"classified_commits": new_classified, "hitl_1_approved": True}
-    
-    # If user approved without changes
+        new_commits = user_response.get("corrected_commits")
+        new_sub_domains = user_response.get("corrected_sub_domains")
+
+        updates = {"hitl_1_approved": True}
+        if new_commits is not None:
+            updates["classified_commits"] = [ClassifiedCommit(**c) for c in new_commits]
+        if new_sub_domains is not None:
+            updates["service_sub_domains"] = [ServiceSubDomain(**sd) for sd in new_sub_domains]
+
+        return updates
+
     return {"hitl_1_approved": True}
 
 
 # =====================================================================
-# NODE 3: Klasifikasi Level 2 & Semantic Clustering
+# NODE 3: Klasifikasi Level 2 & Granular Semantic Sub-Clustering
 # =====================================================================
+class GranularClusterOutput(BaseModel):
+    clusters: List[ContextCluster]
+
+
 def classify_l2_and_cluster_node(state: ReportState) -> dict:
     """
-    Two-step process:
-    1. LLM classifies each commit into L2 sub-categories (FEATURE_UI, BUG_FIX, etc.)
-    2. Semantic embedding + clustering groups related commits together
+    4-Level Granular Semantic Sub-Clustering:
+    1. Group commits by Domain/Sub-Domain & Conventional Category (FEATURE_UI, BUG_FIX, etc.)
+    2. Group into ContextCluster (module/feature area)
+    3. Break down into SubClusterItem (specific user stories / functional units)
     """
-    raw_commits = state["raw_commits"]
-    classified = state["classified_commits"]
+    raw_commits = state.get("raw_commits", [])
+    classified = state.get("classified_commits", [])
+    sub_domains = state.get("service_sub_domains", [])
 
     if not classified:
-        return {"l2_classified": [], "clusters": []}
+        return {"core_system_clusters": [], "service_app_clusters": [], "clusters": []}
 
     commit_dict = {c.short_id: c for c in raw_commits}
+    classified_dict = {c.id: c for c in classified}
 
-    # --- Step 1: L2 Classification via LLM ---
-    combined_text = "\n".join([
-        f"[{c.id}] ({c.category}) {commit_dict[c.id].title if c.id in commit_dict else ''}"
-        for c in classified
-    ])
+    # Group commits by Domain -> Sub-domain -> Conventional Type
+    system_core_commits: List[NormalizedCommit] = []
+    service_app_commits_by_subdomain: Dict[str, List[NormalizedCommit]] = {}
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """Anda adalah AI Architect. Tentukan sub-kategori Level 2 untuk setiap commit.
-Sub-kategori yang tersedia:
-- 'FEATURE_UI': Fitur baru, pengembangan antarmuka, penambahan fungsionalitas, UI/UX.
-- 'BUG_FIX': Perbaikan bug, resolusi error, fixing crash atau kesalahan.
-- 'REFACTOR_PERF': Refactoring kode, optimalisasi performa, peningkatan kualitas kode.
-- 'INFRA_CHORE': Konfigurasi infrastruktur, CI/CD, Docker, maintenance, dependency update.
-
-Klasifikasikan setiap commit berdasarkan ID-nya. Pertahankan kategori L1 (SYSTEM_APP/SERVICE_APP) yang sudah ada."""),
-        ("user", "Daftar commit:\n{combined_text}")
-    ])
+    for c in classified:
+        nc = commit_dict.get(c.id)
+        if not nc:
+            continue
+        if c.category in ("SYSTEM_CORE", "SYSTEM_APP"):
+            system_core_commits.append(nc)
+        else:
+            sid = c.sub_domain_id or "general"
+            service_app_commits_by_subdomain.setdefault(sid, []).append(nc)
 
     llm = get_llm()
-    structured_llm = llm.with_structured_output(L2ClassificationResult)
-    chain = prompt | structured_llm
+    structured_llm = llm.with_structured_output(GranularClusterOutput)
 
-    logger.info(f"[Node: classify_l2] Mengklasifikasikan {len(classified)} commit ke Level 2...")
-    l2_response = chain.invoke({"combined_text": combined_text})
-    l2_classified = l2_response.results
+    cluster_prompt_template = ChatPromptTemplate.from_messages([
+        ("system", """Anda adalah Lead System Architect & Technical Writer.
+Tugas Anda adalah mengelompokkan commit berikut ke dalam struktur **Granular Semantic Clustering**:
+1. Tentukan sub-kategori Conventional Commits:
+   - 'FEATURE_UI': Fitur baru, antarmuka, fungsionalitas pengguna.
+   - 'BUG_FIX': Resolusi bug, penanganan error, perbaikan cacat sistem.
+   - 'REFACTOR_PERF': Optimasi performa, refaktorisasi, restrukturisasi kode.
+   - 'INFRA_CHORE': Infrastruktur, CI/CD, maintenance, script.
+2. Kelompokkan ke dalam 'ContextCluster' (Area Konteks Modul).
+3. PENTING: JANGAN buat pengelompokan yang terlalu lebar. Di dalam setiap 'ContextCluster', pecah commit menjadi 'sub_clusters' (SubClusterItem) fungsional spesifik (maksimal 3-5 commit per sub-cluster).
+4. Berikan judul sub-cluster yang spesifik dan jelas (contoh: "Integrasi QRIS Dinamis & Penanganan Callback Webhook")."""),
+        ("user", "Domain: {domain_context}\nDaftar Commit:\n{commits_list}\n\nHasilkan ContextCluster dan SubClusterItem:")
+    ])
 
-    # --- Step 2: Semantic Clustering ---
-    # Group commits by (L1 category, L2 category), then cluster within each group
-    groups: dict[tuple[str, str], List[NormalizedCommit]] = {}
-    l2_lookup = {c.id: c for c in l2_classified}
+    chain = cluster_prompt_template | structured_llm
 
-    for l2c in l2_classified:
-        key = (l2c.category_level_1, l2c.category_level_2)
-        commit = commit_dict.get(l2c.id)
-        if commit:
-            groups.setdefault(key, []).append(commit)
+    core_clusters: List[ContextCluster] = []
+    service_clusters: List[ContextCluster] = []
 
-    all_clusters: List[CommitCluster] = []
-
-    for (l1_cat, l2_cat), group_commits in groups.items():
+    # Process System Core commits
+    if system_core_commits:
+        commits_text = "\n".join([
+            f"[{c.short_id}] (type: {c.cc_type or 'feat'}) {c.title}" + (f" | {c.message[:80]}" if c.message else "")
+            for c in system_core_commits
+        ])
+        logger.info(f"[Node: classify_l2] Clustering {len(system_core_commits)} commit Sistem Inti...")
         try:
-            # Attempt semantic clustering
-            semantic_groups = cluster_commits_by_similarity(group_commits)
+            res = chain.invoke({"domain_context": "Sistem Inti Aplikasi (Core Platform)", "commits_list": commits_text})
+            for cl in res.clusters:
+                cl.category_level_1 = "SYSTEM_CORE"
+                core_clusters.append(cl)
         except Exception as e:
-            logger.warning(f"Embedding clustering failed for {l1_cat}/{l2_cat}: {e}. Falling back to single cluster.")
-            semantic_groups = [group_commits]
-
-        for cluster_group in semantic_groups:
-            # Generate a cluster title from the first commit's subject
-            first = cluster_group[0]
-            title = first.cc_subject or first.title
-            if len(title) > 40:
-                title = title[:37] + "..."
-
-            all_clusters.append(CommitCluster(
-                cluster_title=title,
-                commit_ids=[c.short_id for c in cluster_group],
-                category_level_1=l1_cat,
-                category_level_2=l2_cat,
+            logger.warning(f"Clustering error for core system: {e}")
+            # Fallback single cluster
+            core_clusters.append(ContextCluster(
+                cluster_id=f"core-{uuid.uuid4().hex[:6]}",
+                cluster_title="Pembaruan Fondasi Sistem Inti",
+                category_level_1="SYSTEM_CORE",
+                category_level_2="FEATURE_UI",
+                sub_clusters=[SubClusterItem(
+                    sub_cluster_id=f"sub-{uuid.uuid4().hex[:6]}",
+                    sub_cluster_title="Pembaruan Komponen dan Fungsionalitas Inti",
+                    commit_ids=[c.short_id for c in system_core_commits]
+                )]
             ))
 
-    logger.info(f"[Node: classify_l2] Dihasilkan {len(all_clusters)} cluster dari {len(l2_classified)} commit.")
-    return {"l2_classified": l2_classified, "clusters": all_clusters}
+    # Process Service App commits per sub-domain
+    for sid, scommits in service_app_commits_by_subdomain.items():
+        sd_obj = next((s for s in sub_domains if s.sub_domain_id == sid), None)
+        sd_name = sd_obj.sub_domain_name if sd_obj else f"Layanan {sid.title()}"
+
+        commits_text = "\n".join([
+            f"[{c.short_id}] (type: {c.cc_type or 'feat'}) {c.title}" + (f" | {c.message[:80]}" if c.message else "")
+            for c in scommits
+        ])
+        logger.info(f"[Node: classify_l2] Clustering {len(scommits)} commit untuk {sd_name}...")
+        try:
+            res = chain.invoke({"domain_context": f"Layanan Aplikasi: {sd_name}", "commits_list": commits_text})
+            for cl in res.clusters:
+                cl.category_level_1 = "APP_SERVICE"
+                cl.sub_domain_id = sid
+                service_clusters.append(cl)
+        except Exception as e:
+            logger.warning(f"Clustering error for {sd_name}: {e}")
+            service_clusters.append(ContextCluster(
+                cluster_id=f"serv-{sid}-{uuid.uuid4().hex[:6]}",
+                cluster_title=f"Aktivitas Pengembangan {sd_name}",
+                category_level_1="APP_SERVICE",
+                sub_domain_id=sid,
+                category_level_2="FEATURE_UI",
+                sub_clusters=[SubClusterItem(
+                    sub_cluster_id=f"sub-{uuid.uuid4().hex[:6]}",
+                    sub_cluster_title=f"Penyempurnaan Fitur pada {sd_name}",
+                    commit_ids=[c.short_id for c in scommits]
+                )]
+            ))
+
+    # Backward-compat clusters list
+    legacy_clusters: List[CommitCluster] = []
+    for c in core_clusters + service_clusters:
+        for sc in c.sub_clusters:
+            legacy_clusters.append(CommitCluster(
+                cluster_title=sc.sub_cluster_title,
+                commit_ids=sc.commit_ids,
+                category_level_1=c.category_level_1,
+                category_level_2=c.category_level_2
+            ))
+
+    return {
+        "core_system_clusters": core_clusters,
+        "service_app_clusters": service_clusters,
+        "clusters": legacy_clusters
+    }
 
 
 # =====================================================================
-# NODE 4: HITL Checkpoint 2 — User reviews L2 + Clusters
+# NODE 4: HITL Checkpoint 2 — User reviews & CRUD on Sub-Clusters
 # =====================================================================
 def hitl_checkpoint_2_node(state: ReportState) -> dict:
     """
     Human-in-the-Loop Checkpoint 2.
-    Pauses execution and presents clusters for user review.
-    User can rename, merge, or split clusters.
+    Pauses execution and presents full 4-level tree for user review.
+    Supports full CRUD on Commits and Sub-Clusters.
     """
-    clusters = state["clusters"]
+    core_clusters = state.get("core_system_clusters", [])
+    service_clusters = state.get("service_app_clusters", [])
+    sub_domains = state.get("service_sub_domains", [])
+    raw_commits = {c.short_id: c for c in state.get("raw_commits", [])}
+
+    total_subclusters = sum(len(c.sub_clusters) for c in core_clusters + service_clusters)
 
     user_response = interrupt({
         "type": "hitl_l2_review",
-        "message": f"Review {len(clusters)} cluster semantik.",
-        "clusters": [c.model_dump() for c in clusters],
+        "message": f"Review Hierarki Sub-Cluster: {len(core_clusters)} Cluster Inti, {len(service_clusters)} Cluster Layanan ({total_subclusters} sub-cluster fungsional)",
+        "core_system_clusters": [c.model_dump() for c in core_clusters],
+        "service_app_clusters": [c.model_dump() for c in service_clusters],
+        "service_sub_domains": [sd.model_dump() for sd in sub_domains],
+        "raw_commits": {k: v.model_dump() for k, v in raw_commits.items()},
     })
 
     if user_response and isinstance(user_response, dict):
-        corrected_clusters = user_response.get("corrected_clusters", None)
-        if corrected_clusters:
-            new_clusters = [CommitCluster(**c) for c in corrected_clusters]
-            return {"clusters": new_clusters, "hitl_2_approved": True}
+        new_core = user_response.get("corrected_core_clusters")
+        new_service = user_response.get("corrected_service_clusters")
+
+        updates = {"hitl_2_approved": True}
+        if new_core is not None:
+            updates["core_system_clusters"] = [ContextCluster(**c) for c in new_core]
+        if new_service is not None:
+            updates["service_app_clusters"] = [ContextCluster(**c) for c in new_service]
+
+        return updates
 
     return {"hitl_2_approved": True}
 
@@ -210,67 +336,58 @@ def hitl_checkpoint_2_node(state: ReportState) -> dict:
 # NODE 5: Executive Summary Generation
 # =====================================================================
 def generate_summary_node(state: ReportState) -> dict:
-    """Generate a 2-3 paragraph executive summary of the month's work."""
-    clusters = state["clusters"]
+    """Generate a formal 2-3 paragraph executive summary of the Super App progress."""
+    core_clusters = state.get("core_system_clusters", [])
+    service_clusters = state.get("service_app_clusters", [])
+    sub_domains = state.get("service_sub_domains", [])
     month_year = state.get("month_year", "")
 
-    if not clusters:
-        return {"executive_summary": ""}
+    all_clusters = core_clusters + service_clusters
+    if not all_clusters:
+        return {"executive_summary": "Laporan aktivitas bulanan telah selesai disusun."}
 
-    # Prepare cluster overview for the LLM
-    cluster_overview = "\n".join([
-        f"- [{c.category_level_1}/{c.category_level_2}] {c.cluster_title} ({len(c.commit_ids)} commit)"
-        for c in clusters
-    ])
+    summary_items = []
+    for c in core_clusters:
+        for sc in c.sub_clusters:
+            summary_items.append(f"- [Sistem Inti / {c.category_level_2}] {sc.sub_cluster_title} ({len(sc.commit_ids)} commit)")
 
-    # Count statistics
-    system_count = sum(1 for c in clusters if c.category_level_1 == "SYSTEM_APP")
-    service_count = sum(1 for c in clusters if c.category_level_1 == "SERVICE_APP")
-    feature_count = sum(1 for c in clusters if c.category_level_2 == "FEATURE_UI")
-    bugfix_count = sum(1 for c in clusters if c.category_level_2 == "BUG_FIX")
+    for c in service_clusters:
+        sd = next((s for s in sub_domains if s.sub_domain_id == c.sub_domain_id), None)
+        sd_name = sd.sub_domain_name if sd else c.sub_domain_id or "Layanan"
+        for sc in c.sub_clusters:
+            summary_items.append(f"- [{sd_name} / {c.category_level_2}] {sc.sub_cluster_title} ({len(sc.commit_ids)} commit)")
+
+    cluster_overview = "\n".join(summary_items[:25])
 
     from app.data.style_guide import get_few_shot_prompt
     few_shot_examples = get_few_shot_prompt()
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""Anda adalah Senior Technical Writer dan Product Manager.
-Tugas Anda adalah mengubah daftar commit teknis menjadi paragraf narasi bisnis (Executive Summary style) dalam Bahasa Indonesia yang formal, elegan, dan mudah dipahami oleh manajemen non-teknis.
+        ("system", f"""Anda adalah Senior Technical Writer dan Product Manager Super App.
+Tugas Anda adalah menyusun Executive Summary dalam Bahasa Indonesia yang formal, elegan, dan komprehensif (2-3 paragraf) untuk direksi/manajemen eksekutif.
 
-ATURAN PENULISAN (SANGAT PENTING):
-1. Mulai langsung ke inti. JANGAN gunakan pengantar seperti "Berikut adalah narasi...", "Pada cluster ini...", atau "Pembaruan ini mencakup...".
-2. Ubah istilah teknis menjadi nilai bisnis. (contoh: "Fix NullPointerException" -> "Perbaikan stabilitas sistem untuk mencegah aplikasi tertutup tiba-tiba").
-3. Format paragraf yang utuh, BUKAN bullet points.
-4. Gunakan kalimat pasif formal yang mengalir dengan baik (contoh: "Dilakukan penambahan fitur...", "Telah diperbaiki masalah pada...").
-5. Hindari kata-kata hiperbolis atau marketing (seperti "luar biasa", "revolusioner").
-6. Jika pembaruan tersebut bersifat visual/UI atau membutuhkan bukti visual, TULISKAN placeholder tepat di akhir narasi dengan format: [TAMBAHKAN GAMBAR/CODE: Penjelasan visual yang dibutuhkan].
+ATURAN PENULISAN:
+1. Mulai langsung ke inti perkembangan Super App pada bulan bersangkutan.
+2. Paparkan capaian utama pada fondasi Sistem Inti dan modul-modul Layanan Aplikasi.
+3. Format paragraf yang utuh dan mengalir secara formal, BUKAN bullet point.
+4. Jangan gunakan kata marketing berlebihan.
 
-{few_shot_examples}
-"""),
+{few_shot_examples}"""),
         ("user", """Bulan: {month_year}
-Statistik: {system_count} cluster Sistem Aplikasi, {service_count} cluster Layanan/Infrastruktur, {feature_count} fitur baru, {bugfix_count} perbaikan bug.
-
-Daftar Cluster:
+Daftar Sub-Cluster Aktivitas:
 {cluster_overview}
 
-Tuliskan Executive Summary:""")
+Tuliskan Ringkasan Eksekutif:""")
     ])
 
     llm = get_llm()
     chain = prompt | llm
 
-    logger.info("[Node: generate_summary] Menyusun Executive Summary...")
-    response = chain.invoke({
-        "month_year": month_year,
-        "system_count": system_count,
-        "service_count": service_count,
-        "feature_count": feature_count,
-        "bugfix_count": bugfix_count,
-        "cluster_overview": cluster_overview,
-    })
+    logger.info("[Node: generate_summary] Menyusun Executive Summary Super App...")
+    response = chain.invoke({"month_year": month_year, "cluster_overview": cluster_overview})
 
     content = response.content
     if isinstance(content, list):
-        # Extract text from list of parts (e.g. [{"type": "text", "text": "..."}])
         exec_summary_text = "".join([part.get("text", "") if isinstance(part, dict) else str(part) for part in content])
     else:
         exec_summary_text = str(content)
@@ -279,121 +396,183 @@ Tuliskan Executive Summary:""")
 
 
 # =====================================================================
-# NODE 6: Narrative Generation (Tech → Business Translation)
+# NODE 6: Iterative Sub-Cluster Worker & Incremental Google Docs Sync
 # =====================================================================
-def generate_narratives_node(state: ReportState) -> dict:
+def generate_narratives_and_docs_loop_node(state: ReportState) -> dict:
     """
-    Generate business narratives for each cluster.
-    Processes clusters individually or in small batches.
-    Transforms technical git commits into formal business language.
+    Looping Sub-Cluster Worker:
+    For each sub-cluster:
+      1. LLM generates Balanced Tech-to-Business narration + visual placeholder
+      2. Backend sends batchUpdate directly to Google Docs API
+      3. Updates checkpoint state and progress
     """
-    raw_commits = state["raw_commits"]
-    clusters = state["clusters"]
-
-    if not clusters:
-        return {"final_clusters": []}
+    raw_commits = state.get("raw_commits", [])
+    core_clusters = state.get("core_system_clusters", [])
+    service_clusters = state.get("service_app_clusters", [])
+    sub_domains = state.get("service_sub_domains", [])
+    month_year = state.get("month_year", "")
+    exec_summary = state.get("executive_summary", "")
+    gdocs_mode = state.get("gdocs_mode", "direct")
+    target_doc_id = state.get("gdocs_document_id") or os.getenv("TARGET_DOC_ID") or os.getenv("GDOCS_TEMPLATE_ID")
 
     commit_dict = {c.short_id: c for c in raw_commits}
+    gdocs_service = GDocsService()
 
-    from app.data.style_guide import get_few_shot_prompt
-    few_shot_examples = get_few_shot_prompt()
+    # Step 1: Initialize Google Docs document
+    doc_id = None
+    doc_url = ""
+    if gdocs_service.docs_service:
+        try:
+            doc_id, doc_url = gdocs_service.init_report_document(
+                template_id=target_doc_id,
+                month_year=month_year,
+                exec_summary=exec_summary,
+                mode=gdocs_mode
+            )
+            logger.info(f"[Node: loop_worker] Google Docs diinisialisasi: {doc_url}")
+        except Exception as e:
+            logger.warning(f"Failed to init Google Docs: {e}")
 
-    # System prompt matching GUIDELINES §4
-    system_prompt = f"""Anda adalah Technical Writer & Business Analyst Senior di perusahaan enterprise.
-Tugas Anda adalah menerjemahkan kelompok pesan git commit (Conventional Commits) 
-menjadi laporan progres teknis yang mudah dipahami oleh manajemen eksekutif non-teknis.
+    # Prepare system prompt for balanced narration
+    system_prompt = """Anda adalah Senior Technical Writer & Lead Business Analyst untuk ekosistem Super App.
+Tugas Anda adalah menyusun narasi laporan progres mendalam dari kelompok commit (Sub-Cluster Fungsional).
 
-ATURAN PENULISAN:
-1. Gunakan Bahasa Indonesia formal yang profesional, baku, dan jelas.
-2. DILARANG KERING / TERLALU SINGKAT: Jangan menulis seperti changelog atau bullet point pendek.
-   Tuliskan dalam paragraf naratif utuh atau deskripsi mendalam yang menjelaskan konteks masalah,
-   solusi yang diimplementasikan, serta manfaat operasionalnya.
-3. HINDARI JARGON TEKNIS MENTAH:
-   - Jangan gunakan: "Refactor function get_user_token()", "Fix null pointer exception di table orders", "Bump axios to v1.6".
-   - Gunakan kalimat bisnis: "Pembaruan arsitektur keamanan pada sistem autentikasi pengguna...",
-     "Perbaikan kesalahan pembacaan data pada tabel pesanan...", "Pembaruan komponen pustaka jaringan...".
-4. VISUAL PLACEHOLDER:
-   Jika perubahan melibatkan antarmuka pengguna (UI), alur transaksi baru, atau perubahan arsitektur kompleks,
-   set variabel requires_visual = true dan berikan panduan screenshot yang tepat pada 'visual_placeholder_note'.
-5. MINIMAL 3 kalimat per narasi. Narasi harus menjelaskan APA yang diubah, MENGAPA diubah, dan APA dampaknya.
-
-{few_shot_examples}"""
+ATURAN PENULISAN (BALANCED TECH-TO-BUSINESS):
+1. BAHASA FORMAL & MENGALIR:
+   - Gunakan Bahasa Indonesia formal, baku, dan jelas (2-3 paragraf per sub-cluster).
+   - Jelaskan latar belakang masalah, implementasi solusi, dan dampak operasional/bisnisnya.
+2. PRESERVASI NAMA FUNGSI & ISTILAH TEKNIS PENTING:
+   - JANGAN menerjemahkan istilah baku secara mentah (contoh: JANGAN terjemahkan 'webhook' jadi 'kait web', 'debounce' jadi 'pengurang pantulan').
+   - CANTUMKAN NAMA FUNGSI ASLI (misal: `handleStockLock()`, `validateSession()`) dan ENDPOINT API (misal: `/v1/orders`) dalam tanda petik kode backtick.
+   - PERTAHANKAN istilah teknologi/protokol (misal: **OAuth 2.0**, **Redis**, **JWT**, **WebSocket**, **Docker**) dalam cetak tebal.
+3. VISUAL PLACEHOLDER:
+   - Jika perubahan menyangkut UI/UX, menu baru, atau alur transaksi yang butuh bukti visual, set 'requires_visual' = true dan berikan keterangan screenshot di 'visual_placeholder_note'."""
 
     llm = get_llm()
-    structured_llm = llm.with_structured_output(ClusterResult)
+    structured_llm = llm.with_structured_output(SubClusterNarrationOutput)
 
-    final_clusters: List[ContentCluster] = []
+    narrative_prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("user", """Konteks Domain: {domain_context}
+Kategori: {category_level_2}
+Judul Cluster: {cluster_title}
+Judul Sub-Cluster: {sub_cluster_title}
 
-    # Process clusters in small batches (max 5 per LLM call) to maintain quality
-    batch_size = 5
-    for i in range(0, len(clusters), batch_size):
-        batch = clusters[i:i + batch_size]
+Daftar Commit Terkait:
+{commits_details}
 
-        batch_text_parts = []
-        for cluster in batch:
-            commit_details = []
-            for cid in cluster.commit_ids:
-                c = commit_dict.get(cid)
-                if c:
-                    commit_details.append(f"  - [{c.short_id}] {c.title}")
-            
-            batch_text_parts.append(
-                f"CLUSTER: \"{cluster.cluster_title}\"\n"
-                f"Kategori: {cluster.category_level_1} / {cluster.category_level_2}\n"
-                f"Commit:\n" + "\n".join(commit_details)
-            )
+Buat narasi detail berimbang untuk sub-cluster ini:""")
+    ])
 
-        combined_text = "\n\n".join(batch_text_parts)
+    chain = narrative_prompt | structured_llm
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("user", """Berikut adalah cluster-cluster commit yang perlu Anda terjemahkan menjadi narasi bisnis.
-Untuk setiap cluster, pertahankan cluster_title, commit_ids, category_level_1, dan category_level_2 yang sudah ada.
-Tuliskan business_narrative yang mendalam dan profesional.
+    final_narratives: List[SubClusterNarrationOutput] = []
+    completed_ids: List[str] = []
 
-{combined_text}""")
-        ])
+    # Flatten sub-clusters with hierarchy metadata
+    tasks = []
 
-        chain = prompt | structured_llm
+    # 1. Core System
+    for cl in core_clusters:
+        for sc in cl.sub_clusters:
+            tasks.append({
+                "type": "CORE",
+                "h2": "1. Perbaikan dan Pengembangan Sistem Inti Aplikasi",
+                "h3": f"1.{'1' if cl.category_level_2 == 'FEATURE_UI' else '2'}. {cl.category_level_2}",
+                "h4": f"1.{'1' if cl.category_level_2 == 'FEATURE_UI' else '2'}.1. {cl.cluster_title}",
+                "domain_context": "Sistem Inti Aplikasi (Core Platform)",
+                "cluster": cl,
+                "sub_cluster": sc,
+            })
 
-        batch_num = (i // batch_size) + 1
-        total_batches = (len(clusters) + batch_size - 1) // batch_size
-        logger.info(f"[Node: generate_narratives] Batch {batch_num}/{total_batches} ({len(batch)} cluster)...")
+    # 2. Service Apps
+    for cl in service_clusters:
+        sd = next((s for s in sub_domains if s.sub_domain_id == cl.sub_domain_id), None)
+        sd_name = sd.sub_domain_name if sd else cl.sub_domain_id or "Layanan Aplikasi"
+        for sc in cl.sub_clusters:
+            tasks.append({
+                "type": "SERVICE",
+                "h2": "2. Pengembangan dan Pemeliharaan Layanan Aplikasi",
+                "h3": f"2.{'1' if cl.category_level_2 == 'FEATURE_UI' else '2'}. {cl.category_level_2}",
+                "h4": f"{sd_name} — {cl.cluster_title}",
+                "domain_context": f"Layanan Aplikasi: {sd_name}",
+                "cluster": cl,
+                "sub_cluster": sc,
+            })
 
-        response = chain.invoke({"combined_text": combined_text})
-        final_clusters.extend(response.clusters)
+    total_tasks = len(tasks)
+    logger.info(f"[Node: loop_worker] Memulai Looping Sub-Cluster Worker untuk {total_tasks} sub-cluster...")
 
-    return {"final_clusters": final_clusters}
+    # Looping execution per sub-cluster
+    for idx, t in enumerate(tasks):
+        cl: ContextCluster = t["cluster"]
+        sc: SubClusterItem = t["sub_cluster"]
 
+        # Gather commit details
+        commit_lines = []
+        for cid in sc.commit_ids:
+            c = commit_dict.get(cid)
+            if c:
+                commit_lines.append(f"- [{c.short_id}] {c.title}" + (f"\n  Body: {c.message[:150]}" if c.message else ""))
 
-# =====================================================================
-# NODE 7: Document Generation (Google Docs)
-# =====================================================================
-from app.services.gdocs_service import GDocsService
+        commits_details = "\n".join(commit_lines) if commit_lines else "- (Commit manual / general task)"
 
-def generate_document_node(state: ReportState) -> dict:
-    """Generate the Google Doc report."""
-    logger.info("[Node: generate_document] Membuat dokumen Google Docs...")
-    
-    try:
-        gdocs_service = GDocsService()
-        if not gdocs_service.docs_service:
-            logger.warning("GDocsService tidak dikonfigurasi, skip document generation.")
-            return {"document_url": ""}
-            
-        gdocs_mode = state.get("gdocs_mode", "direct")
-        target_doc_id = state.get("gdocs_document_id") or os.getenv("TARGET_DOC_ID") or os.getenv("GDOCS_TEMPLATE_ID")
-        
-        if not target_doc_id:
-            logger.info("[Node: generate_document] Tidak ada template_id, membuat template baru...")
-            target_doc_id = gdocs_service.create_template_document()
-            
-        url = gdocs_service.generate_report_from_template(target_doc_id, state, mode=gdocs_mode)
-        logger.info(f"[Node: generate_document] Dokumen berhasil dibuat/diperbarui: {url}")
-        return {"document_url": url}
-    except Exception as e:
-        logger.error(f"Gagal membuat dokumen: {e}")
-        return {"document_url": ""}
+        logger.info(f"[Node: loop_worker] ({idx + 1}/{total_tasks}) Generating narasi untuk: {sc.sub_cluster_title}...")
+        try:
+            narration: SubClusterNarrationOutput = chain.invoke({
+                "domain_context": t["domain_context"],
+                "category_level_2": cl.category_level_2,
+                "cluster_title": cl.cluster_title,
+                "sub_cluster_title": sc.sub_cluster_title,
+                "commits_details": commits_details,
+            })
+            narration.sub_cluster_id = sc.sub_cluster_id
+            narration.cluster_id = cl.cluster_id
+            narration.cluster_title = cl.cluster_title
+            narration.category_level_1 = cl.category_level_1
+            narration.sub_domain_id = cl.sub_domain_id
+            narration.category_level_2 = cl.category_level_2
+            narration.commit_ids = sc.commit_ids
+
+            final_narratives.append(narration)
+            completed_ids.append(sc.sub_cluster_id)
+
+            # Append incrementally to Google Docs
+            if doc_id and gdocs_service.docs_service:
+                try:
+                    gdocs_service.append_subcluster_section(
+                        doc_id=doc_id,
+                        h2_title=t["h2"] if idx == 0 or tasks[idx - 1]["h2"] != t["h2"] else None,
+                        h3_title=t["h3"] if idx == 0 or tasks[idx - 1]["h3"] != t["h3"] else None,
+                        h4_title=t["h4"] if idx == 0 or tasks[idx - 1]["h4"] != t["h4"] else None,
+                        narration_output=narration
+                    )
+                except Exception as doc_err:
+                    logger.warning(f"GDocs append failed for subcluster {sc.sub_cluster_id}: {doc_err}")
+
+        except Exception as err:
+            logger.error(f"Error generating narrative for {sc.sub_cluster_id}: {err}")
+
+    # Convert to legacy ContentCluster for backward compat
+    legacy_final = [
+        ContentCluster(
+            cluster_title=n.sub_cluster_title,
+            commit_ids=n.commit_ids,
+            category_level_1=n.category_level_1 or "SYSTEM_CORE",
+            category_level_2=n.category_level_2 or "FEATURE_UI",
+            business_narrative=n.business_narrative,
+            requires_visual=n.requires_visual,
+            visual_placeholder_note=n.visual_placeholder_note
+        )
+        for n in final_narratives
+    ]
+
+    return {
+        "final_narratives": final_narratives,
+        "final_clusters": legacy_final,
+        "completed_sub_cluster_ids": completed_ids,
+        "document_url": doc_url,
+    }
 
 
 # =====================================================================
@@ -406,21 +585,19 @@ def build_workflow() -> StateGraph:
     # Add nodes
     workflow.add_node("classify_l1", classify_l1_node)
     workflow.add_node("hitl_checkpoint_1", hitl_checkpoint_1_node)
-    workflow.add_node("classify_l2_and_cluster", classify_l2_and_cluster_node)
+    workflow.add_node("classify_l2_and_subcluster", classify_l2_and_cluster_node)
     workflow.add_node("hitl_checkpoint_2", hitl_checkpoint_2_node)
     workflow.add_node("generate_summary", generate_summary_node)
-    workflow.add_node("generate_narratives", generate_narratives_node)
-    workflow.add_node("generate_document", generate_document_node)
+    workflow.add_node("generate_narratives_and_docs_loop", generate_narratives_and_docs_loop_node)
 
     # Define edges
     workflow.add_edge(START, "classify_l1")
     workflow.add_edge("classify_l1", "hitl_checkpoint_1")
-    workflow.add_edge("hitl_checkpoint_1", "classify_l2_and_cluster")
-    workflow.add_edge("classify_l2_and_cluster", "hitl_checkpoint_2")
+    workflow.add_edge("hitl_checkpoint_1", "classify_l2_and_subcluster")
+    workflow.add_edge("classify_l2_and_subcluster", "hitl_checkpoint_2")
     workflow.add_edge("hitl_checkpoint_2", "generate_summary")
-    workflow.add_edge("generate_summary", "generate_narratives")
-    workflow.add_edge("generate_narratives", "generate_document")
-    workflow.add_edge("generate_document", END)
+    workflow.add_edge("generate_summary", "generate_narratives_and_docs_loop")
+    workflow.add_edge("generate_narratives_and_docs_loop", END)
 
     return workflow
 
@@ -431,5 +608,5 @@ def compile_workflow(checkpointer=None):
     return workflow.compile(checkpointer=checkpointer)
 
 
-# Legacy: simple compiled graph without checkpointer (for backward compat / testing)
+# Legacy: simple compiled graph without checkpointer (for testing)
 app_workflow = compile_workflow()

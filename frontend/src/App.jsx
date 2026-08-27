@@ -133,14 +133,15 @@ export default function App() {
   };
 
   // HITL-1 Approve
-  const handleHITL1Approve = async (correctedCommits) => {
+  const handleHITL1Approve = async (correctedCommits, correctedSubDomains) => {
     setPipelineStatus('running');
-    setStatusMessage('Melanjutkan pipeline — Klasifikasi L2 & Clustering...');
+    setStatusMessage('Melanjutkan pipeline — Granular Sub-Clustering...');
     setCurrentStep(3); // Stay on step 3 showing loading
 
     try {
       await api.resumeWorkflow(threadId, {
         corrected_commits: correctedCommits,
+        corrected_sub_domains: correctedSubDomains,
       });
 
       // Start polling again for the next HITL checkpoint or completion
@@ -152,15 +153,16 @@ export default function App() {
   };
 
   // HITL-2 Approve
-  const handleHITL2Approve = async (correctedClusters) => {
+  const handleHITL2Approve = async (coreClusters, serviceClusters) => {
     setPipelineStatus('running');
-    setStatusMessage('Generating Executive Summary & Narasi...');
+    setStatusMessage('Generating Executive Summary & Looping Sub-Cluster Narration to Google Docs...');
     setCurrentStep(5);
     markComplete(4);
 
     try {
       await api.resumeWorkflow(threadId, {
-        corrected_clusters: correctedClusters,
+        corrected_core_clusters: coreClusters,
+        corrected_service_clusters: serviceClusters,
       });
 
       // Poll for completion

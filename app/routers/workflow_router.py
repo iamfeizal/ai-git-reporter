@@ -8,7 +8,7 @@ Endpoints:
   POST /api/workflow/{id}/resume — Resume from HITL interrupt with user corrections
 """
 import uuid
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -45,7 +45,6 @@ def get_checkpointer():
                 detail="PostgreSQL DATABASE_URL diperlukan untuk workflow HITL. SQLite tidak didukung."
             )
         # Convert SQLAlchemy URL to psycopg format if needed
-        # psycopg uses postgresql:// (not postgresql+psycopg2://)
         conninfo = db_url.replace("postgresql+psycopg2://", "postgresql://")
 
         _pool = ConnectionPool(conninfo=conninfo, kwargs={"autocommit": True})
@@ -69,8 +68,11 @@ class StartWorkflowRequest(BaseModel):
 
 class ResumeWorkflowRequest(BaseModel):
     """User corrections for HITL resume."""
-    corrected_commits: Optional[list] = None    # For HITL-1
-    corrected_clusters: Optional[list] = None   # For HITL-2
+    corrected_commits: Optional[list] = None            # For HITL-1 / HITL-2
+    corrected_sub_domains: Optional[list] = None        # For HITL-1 (CRUD on sub-domains)
+    corrected_core_clusters: Optional[list] = None      # For HITL-2 (ContextCluster tree)
+    corrected_service_clusters: Optional[list] = None   # For HITL-2 (ContextCluster tree)
+    corrected_clusters: Optional[list] = None           # Legacy support for HITL-2
 
 
 # --- Endpoints ---
@@ -82,12 +84,10 @@ def start_workflow(req: StartWorkflowRequest, db: Session = Depends(get_db)):
     
     Returns a thread_id that can be used to track progress and resume from HITL pauses.
     """
-    # Validate GitLab instance
     instance = db.query(GitLabInstance).filter(GitLabInstance.id == req.instance_id).first()
     if not instance:
         raise HTTPException(status_code=404, detail="GitLab instance not found")
 
-    # Fetch and normalize commits
     try:
         normalized_commits = gitlab_service.get_normalized_commits(
             url=instance.gitlab_url,
@@ -106,35 +106,34 @@ def start_workflow(req: StartWorkflowRequest, db: Session = Depends(get_db)):
             detail="Tidak ada commit ditemukan setelah filtering pada rentang tanggal tersebut."
         )
 
-    # Generate thread ID
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    # Build initial state
     initial_state = {
         "month_year": req.month_year or "",
         "gdocs_mode": req.gdocs_mode,
         "gdocs_document_id": req.gdocs_document_id,
         "raw_commits": normalized_commits,
+        "service_sub_domains": [],
         "classified_commits": [],
         "hitl_1_approved": False,
-        "l2_classified": [],
+        "core_system_clusters": [],
+        "service_app_clusters": [],
         "clusters": [],
         "hitl_2_approved": False,
         "executive_summary": "",
+        "final_narratives": [],
         "final_clusters": [],
+        "completed_sub_cluster_ids": [],
         "document_url": "",
+        "progress_message": "Memulai analisis...",
     }
 
-    # Get checkpointer and compiled workflow
     _, workflow = get_checkpointer()
 
-    # Run the graph — it will pause at the first HITL interrupt
     try:
         result = workflow.invoke(initial_state, config=config)
-    except Exception as e:
-        # Graph pausing via interrupt is normal — it raises an interrupt
-        # Actually, with invoke(), the interrupt returns the state up to that point
+    except Exception:
         pass
 
     return {
@@ -149,8 +148,6 @@ def start_workflow(req: StartWorkflowRequest, db: Session = Depends(get_db)):
 def get_workflow_status(thread_id: str):
     """
     Check the current status of a workflow thread.
-    
-    Returns which node the graph is at, whether it's paused for HITL, etc.
     """
     checkpointer, workflow = get_checkpointer()
     config = {"configurable": {"thread_id": thread_id}}
@@ -163,11 +160,9 @@ def get_workflow_status(thread_id: str):
     if state is None:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    # Determine status
     next_nodes = state.next if state.next else []
     is_paused = len(next_nodes) > 0
-    
-    # Check if there are pending interrupts
+
     has_interrupt = False
     interrupt_data = None
     if state.tasks:
@@ -191,7 +186,6 @@ def get_workflow_status(thread_id: str):
 def get_workflow_state(thread_id: str):
     """
     Get the full current state of a workflow thread.
-    Used by the frontend to display HITL review data.
     """
     checkpointer, workflow = get_checkpointer()
     config = {"configurable": {"thread_id": thread_id}}
@@ -207,7 +201,6 @@ def get_workflow_state(thread_id: str):
     values = state_snapshot.values
     next_nodes = list(state_snapshot.next) if state_snapshot.next else []
 
-    # Serialize state values (Pydantic models → dicts)
     serialized = {}
     for key, val in values.items():
         if isinstance(val, list) and val and hasattr(val[0], 'model_dump'):
@@ -217,7 +210,6 @@ def get_workflow_state(thread_id: str):
         else:
             serialized[key] = val
 
-    # Check for interrupt data
     interrupt_data = None
     if state_snapshot.tasks:
         for task in state_snapshot.tasks:
@@ -238,53 +230,48 @@ def get_workflow_state(thread_id: str):
 def resume_workflow(thread_id: str, req: ResumeWorkflowRequest):
     """
     Resume a paused workflow with user corrections.
-    
-    For HITL-1: send corrected_commits (re-classified L1 categories)
-    For HITL-2: send corrected_clusters (renamed/merged/split clusters)
-    
-    If no corrections provided, the graph resumes with the existing state (approved as-is).
     """
     _, workflow = get_checkpointer()
     config = {"configurable": {"thread_id": thread_id}}
 
-    # Build the resume payload
     resume_data = {}
     if req.corrected_commits is not None:
         resume_data["corrected_commits"] = req.corrected_commits
+    if req.corrected_sub_domains is not None:
+        resume_data["corrected_sub_domains"] = req.corrected_sub_domains
+    if req.corrected_core_clusters is not None:
+        resume_data["corrected_core_clusters"] = req.corrected_core_clusters
+    if req.corrected_service_clusters is not None:
+        resume_data["corrected_service_clusters"] = req.corrected_service_clusters
     if req.corrected_clusters is not None:
         resume_data["corrected_clusters"] = req.corrected_clusters
 
-    # Resume with Command
     try:
-        result = workflow.invoke(
+        workflow.invoke(
             Command(resume=resume_data if resume_data else "approved"),
             config=config
         )
-    except Exception as e:
-        # May pause at the next HITL interrupt — that's normal
+    except Exception:
         pass
 
-    # Check the new status after resume
     try:
         state = workflow.get_state(config)
         next_nodes = list(state.next) if state.next else []
         is_completed = len(next_nodes) == 0
 
-        # If completed, extract final results
         if is_completed and state.values:
-            final_clusters = state.values.get("final_clusters", [])
+            final_narratives = state.values.get("final_narratives", [])
             executive_summary = state.values.get("executive_summary", "")
             document_url = state.values.get("document_url", "")
             return {
                 "status": "completed",
                 "thread_id": thread_id,
                 "message": "Pipeline selesai!",
-                "total_clusters": len(final_clusters) if isinstance(final_clusters, list) else 0,
+                "total_narratives": len(final_narratives) if isinstance(final_narratives, list) else 0,
                 "executive_summary": executive_summary,
                 "document_url": document_url,
             }
-        
-        # Check for new interrupt
+
         interrupt_data = None
         if state.tasks:
             for task in state.tasks:
